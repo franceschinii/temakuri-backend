@@ -38,6 +38,7 @@ export class GameEngine {
   private saborMinRequired = 0;
   private consecutivePasses = 0;
   private lastWiperId: string | null = null;
+  private lastPlayerId: string | null = null;
   private mode: GameMode;
   private roomCode: string;
   private turnTimer: NodeJS.Timeout | null = null;
@@ -79,6 +80,7 @@ export class GameEngine {
     this.saborActive = false;
     this.saborMinRequired = 0;
     this.consecutivePasses = 0;
+    this.lastPlayerId = null;
     this.phase = 'DEALING';
 
     const activePlayers = this.activePlayers();
@@ -140,6 +142,7 @@ export class GameEngine {
     const saborTriggered = isSabor(playedCards);
     this.pile = playedCards;
     this.consecutivePasses = 0;
+    this.lastPlayerId = userId;
 
     const events: EngineEvent[] = [];
 
@@ -188,7 +191,8 @@ export class GameEngine {
 
     const activePlayers = this.activePlayers();
     if (this.consecutivePasses >= activePlayers.length - 1) {
-      return { success: true, events: [...events, ...this.resolveWipe(userId)] };
+      const wipeWinner = this.lastPlayerId ?? userId;
+      return { success: true, events: [...events, ...this.resolveWipe(wipeWinner)] };
     }
 
     this.advanceTurn();
