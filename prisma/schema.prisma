@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  email        String?   @unique
+  passwordHash String?
+  isGuest      Boolean   @default(false)
+  avatarIndex  Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  stats       UserStats?
+  sessions    Session[]
+  roomPlayers RoomPlayer[]
+  gameResults GameResult[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UserStats {
+  id            String @id @default(cuid())
+  userId        String @unique
+  gamesPlayed   Int    @default(0)
+  gamesWon      Int    @default(0)
+  saborTriggers Int    @default(0)
+  tricksWon     Int    @default(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Room {
+  id         String     @id @default(cuid())
+  code       String     @unique
+  hostId     String
+  status     String     @default("WAITING")
+  mode       String     @default("TRADITIONAL")
+  maxPlayers Int        @default(4)
+  isPrivate  Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+  startedAt  DateTime?
+  endedAt    DateTime?
+
+  players     RoomPlayer[]
+  gameResults GameResult[]
+}
+
+model RoomPlayer {
+  id       String   @id @default(cuid())
+  roomId   String
+  userId   String
+  seat     Int
+  status   String   @default("CONNECTED")
+  joinedAt DateTime @default(now())
+
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+  @@unique([roomId, seat])
+}
+
+model GameResult {
+  id         String   @id @default(cuid())
+  roomId     String
+  userId     String
+  placement  Int
+  tokensLeft Int
+  createdAt  DateTime @default(now())
+
+  room Room @relation(fields: [roomId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+}

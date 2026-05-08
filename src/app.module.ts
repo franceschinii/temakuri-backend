@@ -1,0 +1,19 @@
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { PrismaModule } from './prisma/prisma.module.js';
+import { AuthModule } from './auth/auth.module.js';
+import { RoomsModule } from './rooms/rooms.module.js';
+import { ProfileModule } from './profile/profile.module.js';
+import { NotificationsModule } from './notifications/notifications.module.js';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    PrismaModule,
+    AuthModule,
+    RoomsModule,
+    ProfileModule,
+    NotificationsModule,
+  ],
+})
+export class AppModule {}
