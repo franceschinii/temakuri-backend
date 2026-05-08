@@ -272,12 +272,9 @@ export class GameEngine {
     this.currentTurnIndex = wiperIndex;
     this.phase = 'WIPE_RESOLUTION';
 
+    this.phase = 'PLAYER_TURN';
+
     const events: EngineEvent[] = [{ type: 'game:wipe', payload: { winnerId: wiperId } }];
-
-    setTimeout(() => {
-      this.phase = 'PLAYER_TURN';
-    }, 1500);
-
     events.push({ type: 'game:turn_started', payload: { userId: wiperId, timeoutMs: TURN_TIMEOUT_MS } });
     return events;
   }

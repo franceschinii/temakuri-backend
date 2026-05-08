@@ -29,22 +29,14 @@ export function beatsPlay(
   saborActive: boolean,
   saborMinRequired: number,
 ): { valid: boolean; reason?: string } {
-  if (!isContiguous(played.map((_, i) => i))) {
-    return { valid: false, reason: 'Cards must be adjacent in hand' };
-  }
-
-  if (!isSameValue(played)) {
-    return { valid: false, reason: 'All cards must share the same value' };
-  }
-
   if (saborActive) {
-    const breakingSabor = played.length >= saborMinRequired && !isSameCategory(played);
-    const meetingRequirement = played.length > saborMinRequired;
+    const breaksSabor = !isSameCategory(played) && played.length >= saborMinRequired;
+    const exceedsRequirement = played.length > saborMinRequired;
 
-    if (!breakingSabor && !meetingRequirement) {
+    if (!breaksSabor && !exceedsRequirement) {
       return {
         valid: false,
-        reason: `Sabor active: must play more than ${saborMinRequired} cards or break with mixed categories`,
+        reason: `Sabor ativo: jogue mais de ${saborMinRequired} carta(s) ou quebre com categorias mistas`,
       };
     }
   }
@@ -59,7 +51,7 @@ export function beatsPlay(
   if (playCount > pileCount) return { valid: true };
   if (playCount === pileCount && playValue > pileValue) return { valid: true };
 
-  return { valid: false, reason: 'Play does not beat the current pile' };
+  return { valid: false, reason: 'A jogada não supera a pilha atual' };
 }
 
 export function validatePlayIndices(
