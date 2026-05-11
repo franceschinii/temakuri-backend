@@ -42,14 +42,16 @@ export class GameEngine {
   private lastPlayerId: string | null = null;
   private mode: GameMode;
   private roomCode: string;
+  private handBias: number;
   private turnTimer: NodeJS.Timeout | null = null;
   private saborTriggersThisGame = 0;
   private tricksWon: Record<string, number> = {};
   private pendingDraws: Map<string, Card> = new Map();
 
-  constructor(roomCode: string, mode: GameMode) {
+  constructor(roomCode: string, mode: GameMode, handBias = 0) {
     this.roomCode = roomCode;
     this.mode = mode;
+    this.handBias = handBias;
   }
 
   addPlayer(userId: string, username: string, avatarIndex: number, seat: number) {
@@ -86,7 +88,7 @@ export class GameEngine {
     this.phase = 'DEALING';
 
     const activePlayers = this.activePlayers();
-    const { hands, drawPile } = dealCards(activePlayers.map(p => p.userId));
+    const { hands, drawPile } = dealCards(activePlayers.map(p => p.userId), this.handBias);
     activePlayers.forEach(p => { p.hand = hands.get(p.userId) ?? []; });
     this.drawPile = drawPile;
 
