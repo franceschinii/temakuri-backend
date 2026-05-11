@@ -178,6 +178,8 @@ export class GameEngine {
     if (this.phase !== 'PLAYER_TURN') return this.fail('Not the right phase');
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
 
+    this.pendingDraws.delete(userId); // defensive: discard any stale pending draw
+
     const player = this.findPlayer(userId)!;
     // Draw from the finite deck (monte) — null if exhausted
     const drawnCard = this.drawPile.length > 0 ? this.drawPile.shift()! : null;

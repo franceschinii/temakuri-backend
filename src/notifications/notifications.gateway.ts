@@ -197,7 +197,6 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   @SubscribeMessage('game:play_cards')
   handlePlayCards(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; cardIndices: number[] }) {
     if (!client.userId) return;
-    this.clearTurnTimer(data.roomCode);
 
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return this.sendToClient(client, 'game:error', { code: 'ROOM_NOT_FOUND', message: 'Game not found' });
@@ -206,6 +205,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (!result.success) {
       return this.sendToClient(client, 'game:error', { code: 'INVALID_PLAY', message: result.reason });
     }
+    this.clearTurnTimer(data.roomCode);
 
     this.dispatchEvents(data.roomCode, result.events);
     this.scheduleBotMoveIfNeeded(data.roomCode, engine);
@@ -226,7 +226,6 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   @SubscribeMessage('game:pass_turn')
   handlePassTurn(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; insertAtIndex: number }) {
     if (!client.userId) return;
-    this.clearTurnTimer(data.roomCode);
 
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return;
@@ -235,6 +234,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (!result.success) {
       return this.sendToClient(client, 'game:error', { code: 'INVALID_PICK', message: result.reason });
     }
+    this.clearTurnTimer(data.roomCode);
 
     this.dispatchEvents(data.roomCode, result.events);
     this.scheduleBotMoveIfNeeded(data.roomCode, engine);
@@ -243,7 +243,6 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   @SubscribeMessage('game:draw_card')
   handleDrawCard(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string }) {
     if (!client.userId) return;
-    this.clearTurnTimer(data.roomCode);
 
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return this.sendToClient(client, 'game:error', { code: 'ROOM_NOT_FOUND', message: 'Game not found' });
@@ -252,6 +251,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (!result.success) {
       return this.sendToClient(client, 'game:error', { code: 'INVALID_PICK', message: result.reason });
     }
+    this.clearTurnTimer(data.roomCode);
 
     this.dispatchEvents(data.roomCode, result.events);
     this.scheduleBotMoveIfNeeded(data.roomCode, engine);
@@ -260,7 +260,6 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   @SubscribeMessage('game:insert_drawn_card')
   handleInsertDrawnCard(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; insertAtIndex: number }) {
     if (!client.userId) return;
-    this.clearTurnTimer(data.roomCode);
 
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return this.sendToClient(client, 'game:error', { code: 'ROOM_NOT_FOUND', message: 'Game not found' });
@@ -269,6 +268,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (!result.success) {
       return this.sendToClient(client, 'game:error', { code: 'INVALID_PICK', message: result.reason });
     }
+    this.clearTurnTimer(data.roomCode);
 
     this.dispatchEvents(data.roomCode, result.events);
     this.scheduleBotMoveIfNeeded(data.roomCode, engine);
@@ -318,13 +318,20 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       if (!currentEngine || currentEngine.isGameOver()) return;
       if (currentEngine.currentTurnUserId() !== currentUserId) return;
 
-      const move = currentEngine.computeBotMove(currentUserId);
       let result: ReturnType<typeof currentEngine.applyPlayCards>;
 
-      if (move.action === 'play') {
-        result = currentEngine.applyPlayCards(currentUserId, move.cardIndices);
+      if (currentEngine.getPhase() === 'PASS_PICK') {
+        // Timer already drew a card for the bot — just insert it
+        const state = currentEngine.getClientStateFor(currentUserId);
+        const insertAt = Math.floor(Math.random() * (state.myHand.length + 1));
+        result = currentEngine.applyInsertDrawn(currentUserId, insertAt);
       } else {
-        result = currentEngine.applyPassTurn(currentUserId, move.insertAtIndex);
+        const move = currentEngine.computeBotMove(currentUserId);
+        if (move.action === 'play') {
+          result = currentEngine.applyPlayCards(currentUserId, move.cardIndices);
+        } else {
+          result = currentEngine.applyPassTurn(currentUserId, move.insertAtIndex);
+        }
       }
 
       if (result.success) {
