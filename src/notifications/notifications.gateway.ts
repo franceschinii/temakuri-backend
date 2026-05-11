@@ -34,6 +34,9 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   private roomBots = new Map<string, Set<string>>(); // roomCode → Set<botUserId>
   private turnTimers = new Map<string, NodeJS.Timeout>(); // roomCode → timer
   private heartbeatInterval: NodeJS.Timeout;
+  private roomReadyMap = new Map<string, Set<string>>(); // roomCode → Set<userId prontos>
+  private chatCooldowns = new Map<string, number>(); // userId → timestamp último envio
+  private reactionCooldowns = new Map<string, number>(); // userId → timestamp última reação
 
   constructor(
     private jwt: JwtService,
@@ -144,6 +147,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       engine.setReady(client.userId, data.ready);
     }
 
+    if (!this.roomReadyMap.has(data.roomCode)) this.roomReadyMap.set(data.roomCode, new Set());
+    if (data.ready) {
+      this.roomReadyMap.get(data.roomCode)!.add(client.userId);
+    } else {
+      this.roomReadyMap.get(data.roomCode)!.delete(client.userId);
+    }
+
     this.broadcastToRoom(data.roomCode, 'lobby:player_ready', { userId: client.userId, ready: data.ready });
   }
 
@@ -159,9 +169,21 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       return this.sendToClient(client, 'lobby:error', { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 2 players' });
     }
 
+    const humanPlayers = room.players.filter(p => !p.isBot);
+    const readySet = this.roomReadyMap.get(data.roomCode) ?? new Set<string>();
+    const notReady = humanPlayers.filter(p => !readySet.has(p.userId));
+    if (notReady.length > 0) {
+      return this.sendToClient(client, 'lobby:error', {
+        code: 'NOT_ALL_READY',
+        message: 'Nem todos os jogadores estão prontos',
+      });
+    }
+
     this.broadcastToRoom(data.roomCode, 'lobby:game_starting', { countdown: STARTING_COUNTDOWN_MS });
 
     setTimeout(async () => {
+      this.roomReadyMap.delete(data.roomCode);
+
       const engine = this.roomManager.create(data.roomCode, room.mode as any, room.handBias ?? 0);
       room.players.forEach(p => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat));
 
@@ -292,7 +314,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   @SubscribeMessage('game:send_reaction')
   handleReaction(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; emoji: string }) {
     if (!client.userId) return;
-    this.broadcastToRoom(data.roomCode, 'game:reaction', { userId: client.userId, emoji: data.emoji });
+    const now = Date.now();
+    const lastReaction = this.reactionCooldowns.get(client.userId) ?? 0;
+    if (now - lastReaction < 3000) return;
+    this.reactionCooldowns.set(client.userId, now);
+    this.broadcastToRoomExcept(data.roomCode, client, 'game:reaction', { userId: client.userId, emoji: data.emoji });
   }
 
   @SubscribeMessage('game:send_message')
@@ -300,9 +326,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     const userId = client.userId;
     const username = client.username;
     if (!userId || !username) return;
+    const now = Date.now();
+    const lastMsg = this.chatCooldowns.get(userId) ?? 0;
+    if (now - lastMsg < 2000) return;
+    this.chatCooldowns.set(userId, now);
     const text = (data.text ?? '').trim().slice(0, 120);
     if (!text) return;
-    this.broadcastToRoom(data.roomCode, 'game:message', { userId, username, text });
+    this.broadcastToRoomExcept(data.roomCode, client, 'game:message', { userId, username, text });
   }
 
   private scheduleBotMoveIfNeeded(roomCode: string, engine: import('../game/engine/GameEngine.js').GameEngine) {
@@ -388,14 +418,21 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       if (!engine || engine.isGameOver()) return;
       if (engine.currentTurnUserId() !== userId) return; // turn already advanced
 
-      // Auto-pass: draw card then insert at random position
-      let result = engine.applyDrawCard(userId);
-      if (result.success && engine.getPhase() === 'PASS_PICK') {
+      // Auto-pass: handle PASS_PICK (player had drawn but not inserted) and normal turn
+      let result: ReturnType<typeof engine.applyDrawCard>;
+      if (engine.getPhase() === 'PASS_PICK') {
         const state = engine.getClientStateFor(userId);
         const insertAt = Math.floor(Math.random() * (state.myHand.length + 1));
         result = engine.applyInsertDrawn(userId, insertAt);
-      } else if (!result.success) {
-        result = engine.applyPassTurn(userId, 0);
+      } else {
+        result = engine.applyDrawCard(userId);
+        if (result.success && engine.getPhase() === 'PASS_PICK') {
+          const state = engine.getClientStateFor(userId);
+          const insertAt = Math.floor(Math.random() * (state.myHand.length + 1));
+          result = engine.applyInsertDrawn(userId, insertAt);
+        } else if (!result.success) {
+          result = engine.applyPassTurn(userId, 0);
+        }
       }
 
       if (result.success) {
@@ -417,6 +454,15 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   private clearTurnTimer(roomCode: string) {
     const t = this.turnTimers.get(roomCode);
     if (t) { clearTimeout(t); this.turnTimers.delete(roomCode); }
+  }
+
+  private broadcastToRoomExcept(roomCode: string, excludeClient: AuthenticatedSocket, event: string, payload: unknown) {
+    const sockets = this.roomSockets.get(roomCode);
+    if (!sockets) return;
+    const msg = JSON.stringify({ event, data: payload });
+    sockets.forEach(ws => {
+      if (ws !== excludeClient && ws.readyState === WebSocket.OPEN) ws.send(msg);
+    });
   }
 
   private broadcastToRoom(roomCode: string, event: string, payload: unknown) {
