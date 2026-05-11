@@ -45,6 +45,7 @@ export class GameEngine {
   private turnTimer: NodeJS.Timeout | null = null;
   private saborTriggersThisGame = 0;
   private tricksWon: Record<string, number> = {};
+  private pendingDraws: Map<string, Card> = new Map();
 
   constructor(roomCode: string, mode: GameMode) {
     this.roomCode = roomCode;
@@ -179,6 +180,66 @@ export class GameEngine {
     // Draw from the finite deck (monte) — null if exhausted
     const drawnCard = this.drawPile.length > 0 ? this.drawPile.shift()! : null;
 
+    if (drawnCard) {
+      const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
+      player.hand.splice(clampedInsert, 0, drawnCard);
+    }
+
+    this.consecutivePasses++;
+
+    const events: EngineEvent[] = [];
+    events.push({
+      type: 'game:turn_passed',
+      payload: { userId, drawnCard, drawPileCount: this.drawPile.length },
+    });
+    if (drawnCard) {
+      events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
+    }
+
+    const activePlayers = this.activePlayers();
+    if (this.consecutivePasses >= activePlayers.length - 1) {
+      const wipeWinner = this.lastPlayerId ?? userId;
+      return { success: true, events: [...events, ...this.resolveWipe(wipeWinner)] };
+    }
+
+    this.advanceTurn();
+    events.push({ type: 'game:turn_started', payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS } });
+
+    return { success: true, events };
+  }
+
+  applyDrawCard(userId: string): EngineResult {
+    if (this.phase !== 'PLAYER_TURN') return this.fail('Not the right phase');
+    if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
+
+    // Deck exhausted: resolve immediately as a pass with no card
+    if (this.drawPile.length === 0) {
+      return this.applyPassTurn(userId, 0);
+    }
+
+    const card = this.drawPile.shift()!;
+    this.pendingDraws.set(userId, card);
+    this.phase = 'PASS_PICK';
+
+    return {
+      success: true,
+      events: [{
+        type: 'game:card_drawn',
+        payload: { card, drawPileCount: this.drawPile.length },
+        targetUserId: userId,
+      }],
+    };
+  }
+
+  applyInsertDrawn(userId: string, insertAtIndex: number): EngineResult {
+    if (this.phase !== 'PASS_PICK') return this.fail('Not in pick phase');
+    if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
+
+    const drawnCard = this.pendingDraws.get(userId) ?? null;
+    this.pendingDraws.delete(userId);
+    this.phase = 'PLAYER_TURN';
+
+    const player = this.findPlayer(userId)!;
     if (drawnCard) {
       const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
       player.hand.splice(clampedInsert, 0, drawnCard);

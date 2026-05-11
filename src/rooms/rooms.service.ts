@@ -125,7 +125,7 @@ export class RoomsService {
     if (room.players.length >= room.maxPlayers) throw new BadRequestException('Room is full');
 
     // Check names against ALL bots in DB (not just current room) to avoid @unique conflicts
-    const botBaseNames = ['Maguro', 'Otoro', 'Salmão', 'Ebi', 'Kani', 'Tamago', 'Ikura'];
+    const botBaseNames = ['Maguro', 'Otoro', 'Sakê', 'Ebi', 'Kani', 'Tamago', 'Ikura', 'Unagi', 'Natto', 'Edamame'];
     const allBotUsernames = await this.prisma.user.findMany({
       where: { isBot: true },
       select: { username: true },
@@ -211,6 +211,8 @@ export class RoomsService {
     if (botIds.size > 0) {
       await this.prisma.user.deleteMany({ where: { id: { in: [...botIds] } } });
     }
+
+    this.events.emit('rooms.public.changed');
   }
 
   private formatRoom(room: any) {

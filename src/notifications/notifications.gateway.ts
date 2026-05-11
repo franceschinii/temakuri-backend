@@ -236,6 +236,38 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.scheduleBotMoveIfNeeded(data.roomCode, engine);
   }
 
+  @SubscribeMessage('game:draw_card')
+  handleDrawCard(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string }) {
+    if (!client.userId) return;
+
+    const engine = this.roomManager.get(data.roomCode);
+    if (!engine) return this.sendToClient(client, 'game:error', { code: 'ROOM_NOT_FOUND', message: 'Game not found' });
+
+    const result = engine.applyDrawCard(client.userId);
+    if (!result.success) {
+      return this.sendToClient(client, 'game:error', { code: 'INVALID_PICK', message: result.reason });
+    }
+
+    this.dispatchEvents(data.roomCode, result.events);
+    this.scheduleBotMoveIfNeeded(data.roomCode, engine);
+  }
+
+  @SubscribeMessage('game:insert_drawn_card')
+  handleInsertDrawnCard(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; insertAtIndex: number }) {
+    if (!client.userId) return;
+
+    const engine = this.roomManager.get(data.roomCode);
+    if (!engine) return this.sendToClient(client, 'game:error', { code: 'ROOM_NOT_FOUND', message: 'Game not found' });
+
+    const result = engine.applyInsertDrawn(client.userId, data.insertAtIndex ?? 0);
+    if (!result.success) {
+      return this.sendToClient(client, 'game:error', { code: 'INVALID_PICK', message: result.reason });
+    }
+
+    this.dispatchEvents(data.roomCode, result.events);
+    this.scheduleBotMoveIfNeeded(data.roomCode, engine);
+  }
+
   @SubscribeMessage('game:market_swap')
   handleMarketSwap(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; handIndex: number; marketIndex: number }) {
     if (!client.userId) return;
