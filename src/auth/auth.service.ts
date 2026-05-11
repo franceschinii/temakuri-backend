@@ -2,6 +2,8 @@ import { Injectable, BadRequestException, UnauthorizedException } from '@nestjs/
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
+import * as crypto from 'crypto';
+import * as nodemailer from 'nodemailer';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RegisterDto, LoginDto, GuestDto } from './dto/auth.dto.js';
 
@@ -88,6 +90,75 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new UnauthorizedException();
     return this.sanitizeUser(user);
+  }
+
+  async forgotPassword(email: string) {
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    // Responde igual mesmo se não encontrar — evita enumeração de emails
+    if (!user || user.isGuest) return;
+
+    // Invalida tokens anteriores do mesmo usuário
+    await this.prisma.passwordResetToken.deleteMany({ where: { userId: user.id } });
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutos
+    await this.prisma.passwordResetToken.create({ data: { userId: user.id, token, expiresAt } });
+
+    const frontendUrl = this.config.get('FRONTEND_URL', 'http://localhost:5173');
+    const resetLink = `${frontendUrl}/auth/reset-password?token=${token}`;
+
+    await this.sendResetEmail(email, user.username, resetLink);
+  }
+
+  async resetPassword(token: string, newPassword: string) {
+    const record = await this.prisma.passwordResetToken.findUnique({ where: { token } });
+    if (!record || record.expiresAt < new Date()) {
+      throw new BadRequestException('Token inválido ou expirado');
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await this.prisma.user.update({
+      where: { id: record.userId },
+      data: { passwordHash },
+    });
+
+    await this.prisma.passwordResetToken.delete({ where: { token } });
+    // Invalidar todas as sessões ativas após troca de senha
+    await this.prisma.session.deleteMany({ where: { userId: record.userId } });
+  }
+
+  private async sendResetEmail(to: string, username: string, resetLink: string) {
+    const transporter = nodemailer.createTransport({
+      host: this.config.get('SMTP_HOST', 'smtp.gmail.com'),
+      port: Number(this.config.get('SMTP_PORT', '587')),
+      secure: this.config.get('SMTP_SECURE', 'false') === 'true',
+      auth: {
+        user: this.config.get('SMTP_USER'),
+        pass: this.config.get('SMTP_PASS'),
+      },
+    });
+
+    await transporter.sendMail({
+      from: `"Temakuri" <${this.config.get('SMTP_USER')}>`,
+      to,
+      subject: 'Redefinir senha — Temakuri',
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+          <h2 style="margin-bottom:8px">Olá, ${username}!</h2>
+          <p style="color:#666;margin-bottom:24px">
+            Recebemos um pedido para redefinir a senha da sua conta no Temakuri.
+            O link abaixo expira em <strong>15 minutos</strong>.
+          </p>
+          <a href="${resetLink}"
+            style="display:inline-block;background:#7c3aed;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600">
+            Redefinir Senha
+          </a>
+          <p style="color:#999;font-size:12px;margin-top:24px">
+            Se você não solicitou isso, ignore este email.
+          </p>
+        </div>
+      `,
+    });
   }
 
   private async generateTokens(userId: string, username: string) {
