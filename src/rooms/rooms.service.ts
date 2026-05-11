@@ -126,17 +126,25 @@ export class RoomsService {
     if (room.players.length >= room.maxPlayers) throw new BadRequestException('Room is full');
 
     // Check names against ALL bots in DB (not just current room) to avoid @unique conflicts
-    const botBaseNames = ['Maguro', 'Otoro', 'Sakê', 'Ebi', 'Kani', 'Tamago', 'Ikura', 'Unagi', 'Natto', 'Edamame'];
+    const botBaseNames = [
+      'Sukiyaki-san',    // Sr. Sukiyaki
+      'Tonkotsu-kun',    // garoto do tonkotsu
+      'Misoshiru-sama',  // o grande sopa de missô
+      'Karaage-chan',    // franguinho frito
+      'Gyoza-sensei',    // mestre dos pastéis
+      'Tempurão',        // tempura + -ão (pt-br mashup)
+      'Onigiri-dono',    // senhor bolinho de arroz
+      'Ramen-hime',      // princesa do ramen
+      'Taiyaki-bucho',   // chefe taiyaki
+      'Yakiniku-osho',   // rei do churrasco japonês
+    ];
     const allBotUsernames = await this.prisma.user.findMany({
       where: { isBot: true },
       select: { username: true },
     });
     const usedBotNames = new Set(allBotUsernames.map(b => b.username));
-    const availableBase = botBaseNames.find(n => !usedBotNames.has(`Bot ${n}`));
-    // Fallback with short random suffix to guarantee uniqueness
-    const username = availableBase
-      ? `Bot ${availableBase}`
-      : `Bot ${Date.now().toString(36).slice(-5).toUpperCase()}`;
+    const availableBase = botBaseNames.find(n => !usedBotNames.has(n));
+    const username = availableBase ?? `Bot-${Date.now().toString(36).slice(-5).toUpperCase()}`;
 
     const bot = await this.prisma.user.create({
       data: { username, isBot: true, isGuest: true },
