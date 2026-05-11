@@ -32,6 +32,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   private userSockets = new Map<string, Set<AuthenticatedSocket>>();
   private roomSockets = new Map<string, Set<AuthenticatedSocket>>();
   private roomBots = new Map<string, Set<string>>(); // roomCode → Set<botUserId>
+  private turnTimers = new Map<string, NodeJS.Timeout>(); // roomCode → timer
   private heartbeatInterval: NodeJS.Timeout;
 
   constructor(
@@ -65,13 +66,14 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
     try {
       const payload = await this.jwt.verifyAsync(token, { secret: this.config.get('JWT_SECRET') });
-      client.userId = payload.sub;
+      const userId: string = payload.sub;
+      client.userId = userId;
       client.username = payload.username;
 
-      if (!this.userSockets.has(client.userId)) {
-        this.userSockets.set(client.userId, new Set());
+      if (!this.userSockets.has(userId)) {
+        this.userSockets.set(userId, new Set());
       }
-      this.userSockets.get(client.userId)!.add(client);
+      this.userSockets.get(userId)!.add(client);
     } catch {
       client.close(4001, 'Invalid token');
     }
@@ -163,7 +165,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       const engine = this.roomManager.create(data.roomCode, room.mode as any);
       room.players.forEach(p => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat));
 
-      const bots = new Set(room.players.filter(p => p.isBot).map(p => p.userId));
+      const bots = new Set<string>(room.players.filter(p => p.isBot).map(p => p.userId));
       this.roomBots.set(data.roomCode, bots);
 
       await this.roomsService.markStarted(data.roomCode);
@@ -195,6 +197,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   @SubscribeMessage('game:play_cards')
   handlePlayCards(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; cardIndices: number[] }) {
     if (!client.userId) return;
+    this.clearTurnTimer(data.roomCode);
 
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return this.sendToClient(client, 'game:error', { code: 'ROOM_NOT_FOUND', message: 'Game not found' });
@@ -223,6 +226,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   @SubscribeMessage('game:pass_turn')
   handlePassTurn(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; insertAtIndex: number }) {
     if (!client.userId) return;
+    this.clearTurnTimer(data.roomCode);
 
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return;
@@ -239,6 +243,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   @SubscribeMessage('game:draw_card')
   handleDrawCard(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string }) {
     if (!client.userId) return;
+    this.clearTurnTimer(data.roomCode);
 
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return this.sendToClient(client, 'game:error', { code: 'ROOM_NOT_FOUND', message: 'Game not found' });
@@ -255,6 +260,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   @SubscribeMessage('game:insert_drawn_card')
   handleInsertDrawnCard(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; insertAtIndex: number }) {
     if (!client.userId) return;
+    this.clearTurnTimer(data.roomCode);
 
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return this.sendToClient(client, 'game:error', { code: 'ROOM_NOT_FOUND', message: 'Game not found' });
@@ -287,6 +293,16 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   handleReaction(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; emoji: string }) {
     if (!client.userId) return;
     this.broadcastToRoom(data.roomCode, 'game:reaction', { userId: client.userId, emoji: data.emoji });
+  }
+
+  @SubscribeMessage('game:send_message')
+  handleMessage(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; text: string }) {
+    const userId = client.userId;
+    const username = client.username;
+    if (!userId || !username) return;
+    const text = (data.text ?? '').trim().slice(0, 120);
+    if (!text) return;
+    this.broadcastToRoom(data.roomCode, 'game:message', { userId, username, text });
   }
 
   private scheduleBotMoveIfNeeded(roomCode: string, engine: import('../game/engine/GameEngine.js').GameEngine) {
@@ -345,7 +361,55 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       } else {
         this.broadcastToRoom(roomCode, event.type, event.payload);
       }
+
+      // Arm turn timer whenever a new turn starts
+      if (event.type === 'game:turn_started') {
+        const { userId, timeoutMs } = event.payload as { userId: string; timeoutMs: number };
+        this.armTurnTimer(roomCode, userId, timeoutMs);
+      }
     }
+  }
+
+  private armTurnTimer(roomCode: string, userId: string, timeoutMs: number) {
+    // Cancel any previous timer for this room
+    const prev = this.turnTimers.get(roomCode);
+    if (prev) clearTimeout(prev);
+
+    const timer = setTimeout(() => {
+      this.turnTimers.delete(roomCode);
+      const engine = this.roomManager.get(roomCode);
+      if (!engine || engine.isGameOver()) return;
+      if (engine.currentTurnUserId() !== userId) return; // turn already advanced
+
+      // Auto-pass: draw card then insert at random position
+      let result = engine.applyDrawCard(userId);
+      if (result.success && engine.getPhase() === 'PASS_PICK') {
+        const state = engine.getClientStateFor(userId);
+        const insertAt = Math.floor(Math.random() * (state.myHand.length + 1));
+        result = engine.applyInsertDrawn(userId, insertAt);
+      } else if (!result.success) {
+        result = engine.applyPassTurn(userId, 0);
+      }
+
+      if (result.success) {
+        this.dispatchEvents(roomCode, result.events);
+        this.scheduleBotMoveIfNeeded(roomCode, engine);
+        if (engine.isGameOver()) {
+          const rankings = result.events.find(e => e.type === 'game:game_over')?.payload?.['rankings'] as any[];
+          if (rankings) {
+            this.roomsService.markFinished(roomCode, rankings.map(r => ({ userId: r.userId, placement: r.placement, tokensLeft: r.tokensLeft })));
+            setTimeout(() => this.roomManager.destroy(roomCode), 60_000);
+          }
+        }
+      }
+    }, timeoutMs + 500); // small grace buffer
+
+    this.turnTimers.set(roomCode, timer);
+  }
+
+  private clearTurnTimer(roomCode: string) {
+    const t = this.turnTimers.get(roomCode);
+    if (t) { clearTimeout(t); this.turnTimers.delete(roomCode); }
   }
 
   private broadcastToRoom(roomCode: string, event: string, payload: unknown) {

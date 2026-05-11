@@ -5,8 +5,9 @@ export function buildDeck(): Card[] {
   const deck: Card[] = [];
 
   for (const value of VALUES) {
+    // Category is fixed to the value: value 1 = SUSHI, value 2 = RAMEN, etc.
+    const category = FOOD_CATEGORIES[value - 1] as FoodCategory;
     for (let variantIndex = 0; variantIndex < CARDS_PER_VALUE; variantIndex++) {
-      const category = FOOD_CATEGORIES[variantIndex % FOOD_CATEGORIES.length] as FoodCategory;
       deck.push({
         id: `${value}-${variantIndex}`,
         value,
