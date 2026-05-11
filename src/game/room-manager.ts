@@ -6,8 +6,8 @@ import { GameMode } from '../types/game.types.js';
 export class RoomManager {
   private engines = new Map<string, GameEngine>();
 
-  create(roomCode: string, mode: GameMode): GameEngine {
-    const engine = new GameEngine(roomCode, mode);
+  create(roomCode: string, mode: GameMode, handBias = 0): GameEngine {
+    const engine = new GameEngine(roomCode, mode, handBias);
     this.engines.set(roomCode, engine);
     return engine;
   }

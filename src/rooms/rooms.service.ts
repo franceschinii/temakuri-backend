@@ -29,6 +29,7 @@ export class RoomsService {
         mode: dto.mode,
         maxPlayers: dto.maxPlayers,
         isPrivate: dto.isPrivate ?? true,
+        handBias: dto.handBias ?? 0,
         status: 'WAITING',
         players: {
           create: { userId: hostId, seat: 0, status: 'CONNECTED' },
@@ -224,6 +225,7 @@ export class RoomsService {
       mode: room.mode,
       maxPlayers: room.maxPlayers,
       isPrivate: room.isPrivate,
+      handBias: room.handBias ?? 0,
       players: room.players.map((rp: any) => ({
         userId: rp.userId,
         username: rp.user?.username ?? 'Unknown',

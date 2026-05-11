@@ -31,6 +31,7 @@ export function shuffle<T>(arr: T[]): T[] {
 
 export function dealCards(
   playerIds: string[],
+  bias = 0,
 ): { hands: Map<string, Card[]>; drawPile: Card[] } {
   const count = playerIds.length;
   const handSize = HAND_SIZE[count];
@@ -40,9 +41,25 @@ export function dealCards(
   const hands = new Map<string, Card[]>();
 
   playerIds.forEach((id, i) => {
-    hands.set(id, deck.slice(i * handSize, (i + 1) * handSize));
+    let hand = deck.slice(i * handSize, (i + 1) * handSize);
+    if (bias > 0) hand = applyHandBias(hand, bias);
+    hands.set(id, hand);
   });
 
   const drawPile = deck.slice(count * handSize);
   return { hands, drawPile };
+}
+
+// Sorts hand by value (grouping same-value cards together) then applies
+// random swaps inversely proportional to bias, so bias=1 = fully grouped,
+// bias=0 = fully random (called only when bias > 0).
+function applyHandBias(hand: Card[], bias: number): Card[] {
+  const sorted = [...hand].sort((a, b) => a.value - b.value);
+  const swaps = Math.floor((1 - bias) * hand.length * 2);
+  for (let i = 0; i < swaps; i++) {
+    const a = Math.floor(Math.random() * sorted.length);
+    const b = Math.floor(Math.random() * sorted.length);
+    [sorted[a], sorted[b]] = [sorted[b], sorted[a]];
+  }
+  return sorted;
 }

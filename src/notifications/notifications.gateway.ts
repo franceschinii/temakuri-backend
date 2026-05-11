@@ -162,7 +162,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.broadcastToRoom(data.roomCode, 'lobby:game_starting', { countdown: STARTING_COUNTDOWN_MS });
 
     setTimeout(async () => {
-      const engine = this.roomManager.create(data.roomCode, room.mode as any);
+      const engine = this.roomManager.create(data.roomCode, room.mode as any, room.handBias ?? 0);
       room.players.forEach(p => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat));
 
       const bots = new Set<string>(room.players.filter(p => p.isBot).map(p => p.userId));
