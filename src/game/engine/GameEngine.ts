@@ -397,4 +397,38 @@ export class GameEngine {
   getMode(): GameMode {
     return this.mode;
   }
+
+  currentTurnUserId(): string {
+    return this.currentPlayer().userId;
+  }
+
+  computeBotMove(userId: string): { action: 'play'; cardIndices: number[] } | { action: 'pass'; pickIndex: number } {
+    const player = this.findPlayer(userId);
+    if (!player) return { action: 'pass', pickIndex: 0 };
+
+    const hand = player.hand;
+
+    // Group adjacent indices by value
+    for (let start = 0; start < hand.length; start++) {
+      const group: number[] = [start];
+      for (let j = start + 1; j < hand.length; j++) {
+        if (hand[j].value === hand[start].value) group.push(j);
+        else break;
+      }
+
+      const validation = validatePlayIndices(
+        hand,
+        group,
+        this.pile,
+        this.saborActive,
+        this.saborMinRequired,
+      );
+
+      if (validation.valid) return { action: 'play', cardIndices: group };
+    }
+
+    // No legal play — pass
+    const pickIndex = this.pile.length > 0 ? 0 : 0;
+    return { action: 'pass', pickIndex };
+  }
 }

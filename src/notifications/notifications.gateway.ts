@@ -8,6 +8,7 @@ import {
   MessageBody,
   WsException,
 } from '@nestjs/websockets';
+import { OnEvent } from '@nestjs/event-emitter';
 import { Server, WebSocket } from 'ws';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -30,6 +31,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
   private userSockets = new Map<string, Set<AuthenticatedSocket>>();
   private roomSockets = new Map<string, Set<AuthenticatedSocket>>();
+  private roomBots = new Map<string, Set<string>>(); // roomCode → Set<botUserId>
   private heartbeatInterval: NodeJS.Timeout;
 
   constructor(
@@ -161,10 +163,14 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       const engine = this.roomManager.create(data.roomCode, room.mode as any);
       room.players.forEach(p => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat));
 
+      const bots = new Set(room.players.filter(p => p.isBot).map(p => p.userId));
+      this.roomBots.set(data.roomCode, bots);
+
       await this.roomsService.markStarted(data.roomCode);
 
       const events = engine.startRound();
       this.dispatchEvents(data.roomCode, events);
+      this.scheduleBotMoveIfNeeded(data.roomCode, engine);
     }, STARTING_COUNTDOWN_MS);
   }
 
@@ -199,6 +205,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
 
     this.dispatchEvents(data.roomCode, result.events);
+    this.scheduleBotMoveIfNeeded(data.roomCode, engine);
 
     if (engine.isGameOver()) {
       const rankings = result.events.find(e => e.type === 'game:game_over')?.payload?.['rankings'] as any[];
@@ -226,6 +233,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
 
     this.dispatchEvents(data.roomCode, result.events);
+    this.scheduleBotMoveIfNeeded(data.roomCode, engine);
   }
 
   @SubscribeMessage('game:market_swap')
@@ -247,6 +255,55 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   handleReaction(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; emoji: string }) {
     if (!client.userId) return;
     this.broadcastToRoom(data.roomCode, 'game:reaction', { userId: client.userId, emoji: data.emoji });
+  }
+
+  private scheduleBotMoveIfNeeded(roomCode: string, engine: import('../game/engine/GameEngine.js').GameEngine) {
+    if (engine.isGameOver()) return;
+    const bots = this.roomBots.get(roomCode);
+    if (!bots?.size) return;
+
+    const currentUserId = engine.currentTurnUserId();
+    if (!bots.has(currentUserId)) return;
+
+    setTimeout(() => {
+      const currentEngine = this.roomManager.get(roomCode);
+      if (!currentEngine || currentEngine.isGameOver()) return;
+      if (currentEngine.currentTurnUserId() !== currentUserId) return;
+
+      const move = currentEngine.computeBotMove(currentUserId);
+      let result: ReturnType<typeof currentEngine.applyPlayCards>;
+
+      if (move.action === 'play') {
+        result = currentEngine.applyPlayCards(currentUserId, move.cardIndices);
+      } else {
+        result = currentEngine.applyPassTurn(currentUserId, move.pickIndex, 0);
+      }
+
+      if (result.success) {
+        this.dispatchEvents(roomCode, result.events);
+        if (currentEngine.isGameOver()) {
+          const rankings = result.events.find(e => e.type === 'game:game_over')?.payload?.['rankings'] as any[];
+          if (rankings) {
+            this.roomsService.markFinished(roomCode, rankings.map(r => ({
+              userId: r.userId,
+              placement: r.placement,
+              tokensLeft: r.tokensLeft,
+            })));
+            setTimeout(() => this.roomManager.destroy(roomCode), 60_000);
+          }
+        } else {
+          this.scheduleBotMoveIfNeeded(roomCode, currentEngine);
+        }
+      }
+    }, 900);
+  }
+
+  @OnEvent('rooms.public.changed')
+  broadcastPublicRoomsChanged() {
+    const msg = JSON.stringify({ event: 'lobby:public_rooms_changed', data: {} });
+    this.server.clients.forEach((ws: AuthenticatedSocket) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+    });
   }
 
   private dispatchEvents(roomCode: string, events: EngineEvent[]) {
