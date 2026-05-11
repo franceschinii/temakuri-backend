@@ -253,7 +253,7 @@ export class GameEngine {
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
 
     if (this.isFirstTurn) {
-      return this.fail('Must play cards on first turn');
+      return this.fail('No primeiro turno você é obrigado a jogar cartas');
     }
 
     // Modo Duelo: passar = escolher um Prato do Dia, não comprar do monte
