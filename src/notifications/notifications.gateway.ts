@@ -280,15 +280,49 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   @SubscribeMessage('game:insert_drawn_card')
-  handleInsertDrawnCard(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; insertAtIndex: number }) {
+  handleInsertDrawnCard(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; insertAtIndex: number; action?: 'insert' | 'discard' }) {
     if (!client.userId) return;
 
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return this.sendToClient(client, 'game:error', { code: 'ROOM_NOT_FOUND', message: 'Game not found' });
 
-    const result = engine.applyInsertDrawn(client.userId, data.insertAtIndex ?? 0);
+    const result = engine.applyInsertDrawn(client.userId, data.insertAtIndex ?? 0, data.action ?? 'insert');
     if (!result.success) {
       return this.sendToClient(client, 'game:error', { code: 'INVALID_PICK', message: result.reason });
+    }
+    this.clearTurnTimer(data.roomCode);
+
+    this.dispatchEvents(data.roomCode, result.events);
+    this.scheduleBotMoveIfNeeded(data.roomCode, engine);
+  }
+
+  @SubscribeMessage('game:duel_pass_pick')
+  handleDuelPassPick(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; plateIndex: number; action: 'insert' | 'discard'; insertAtIndex?: number }) {
+    if (!client.userId) return;
+
+    const engine = this.roomManager.get(data.roomCode);
+    if (!engine) return this.sendToClient(client, 'game:error', { code: 'ROOM_NOT_FOUND', message: 'Game not found' });
+
+    const result = engine.applyDuelPassPick(client.userId, data.plateIndex, data.action, data.insertAtIndex ?? 0);
+    if (!result.success) {
+      return this.sendToClient(client, 'game:error', { code: 'INVALID_PICK', message: result.reason });
+    }
+    this.clearTurnTimer(data.roomCode);
+
+    this.dispatchEvents(data.roomCode, result.events);
+    this.scheduleBotMoveIfNeeded(data.roomCode, engine);
+  }
+
+  @SubscribeMessage('game:trick_pick')
+  handleTrickPick(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; action: 'take' | 'discard'; insertAtIndex?: number }) {
+    if (!client.userId) return;
+
+    const engine = this.roomManager.get(data.roomCode);
+    if (!engine) return this.sendToClient(client, 'game:error', { code: 'ROOM_NOT_FOUND', message: 'Game not found' });
+
+    const result = engine.applyTrickPick(client.userId, data.action, data.insertAtIndex ?? 0);
+    if (!result.success) {
+      return this.sendToClient(client, 'game:error', { code: 'INVALID_PLAY', message: result.reason });
     }
     this.clearTurnTimer(data.roomCode);
 
@@ -350,7 +384,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
       let result: ReturnType<typeof currentEngine.applyPlayCards>;
 
-      if (currentEngine.getPhase() === 'PASS_PICK') {
+      if (currentEngine.getPhase() === 'TRICK_PICK') {
+        result = currentEngine.applyTrickPick(currentUserId, 'discard');
+      } else if (currentEngine.getPhase() === 'DUEL_PASS_PICK') {
+        result = currentEngine.applyDuelPassPick(currentUserId, 0, 'discard');
+      } else if (currentEngine.getPhase() === 'PASS_PICK') {
         // Timer already drew a card for the bot — just insert it
         const state = currentEngine.getClientStateFor(currentUserId);
         const insertAt = Math.floor(Math.random() * (state.myHand.length + 1));
@@ -418,9 +456,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       if (!engine || engine.isGameOver()) return;
       if (engine.currentTurnUserId() !== userId) return; // turn already advanced
 
-      // Auto-pass: handle PASS_PICK (player had drawn but not inserted) and normal turn
+      // Auto-pass: handle TRICK_PICK, PASS_PICK, DUEL_PASS_PICK e turno normal
       let result: ReturnType<typeof engine.applyDrawCard>;
-      if (engine.getPhase() === 'PASS_PICK') {
+      if (engine.getPhase() === 'TRICK_PICK') {
+        result = engine.applyTrickPick(userId, 'discard');
+      } else if (engine.getPhase() === 'DUEL_PASS_PICK') {
+        result = engine.applyDuelPassPick(userId, 0, 'discard');
+      } else if (engine.getPhase() === 'PASS_PICK') {
         const state = engine.getClientStateFor(userId);
         const insertAt = Math.floor(Math.random() * (state.myHand.length + 1));
         result = engine.applyInsertDrawn(userId, insertAt);
