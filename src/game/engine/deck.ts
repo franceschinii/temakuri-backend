@@ -30,7 +30,7 @@ export function shuffle<T>(arr: T[]): T[] {
 
 export function dealCards(
   playerIds: string[],
-): Map<string, Card[]> {
+): { hands: Map<string, Card[]>; drawPile: Card[] } {
   const count = playerIds.length;
   const handSize = HAND_SIZE[count];
   if (!handSize) throw new Error(`Unsupported player count: ${count}`);
@@ -42,5 +42,6 @@ export function dealCards(
     hands.set(id, deck.slice(i * handSize, (i + 1) * handSize));
   });
 
-  return hands;
+  const drawPile = deck.slice(count * handSize);
+  return { hands, drawPile };
 }

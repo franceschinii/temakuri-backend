@@ -33,6 +33,7 @@ export class GameEngine {
   private round = 0;
   private currentTurnIndex = 0;
   private pile: Card[] = [];
+  private drawPile: Card[] = [];
   private market: Card[] | null = null;
   private saborActive = false;
   private saborMinRequired = 0;
@@ -84,13 +85,13 @@ export class GameEngine {
     this.phase = 'DEALING';
 
     const activePlayers = this.activePlayers();
-    const hands = dealCards(activePlayers.map(p => p.userId));
+    const { hands, drawPile } = dealCards(activePlayers.map(p => p.userId));
     activePlayers.forEach(p => { p.hand = hands.get(p.userId) ?? []; });
+    this.drawPile = drawPile;
 
     if (this.mode === 'MERCADO') {
-      const deck = shuffle(buildDeck());
-      const usedIds = new Set(activePlayers.flatMap(p => p.hand.map(c => c.id)));
-      this.market = deck.filter(c => !usedIds.has(c.id)).slice(0, MARKET_SIZE);
+      // Take market cards from front of draw pile to avoid duplicates
+      this.market = this.drawPile.splice(0, MARKET_SIZE);
     }
 
     if (this.lastWiperId) {
@@ -170,24 +171,29 @@ export class GameEngine {
     return { success: true, events };
   }
 
-  applyPassTurn(userId: string, pickCardIndex: number, insertAtIndex: number): EngineResult {
-    if (this.phase !== 'PLAYER_TURN' && this.phase !== 'PASS_PICK') return this.fail('Not the right phase');
+  applyPassTurn(userId: string, insertAtIndex: number): EngineResult {
+    if (this.phase !== 'PLAYER_TURN') return this.fail('Not the right phase');
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
-    if (this.pile.length === 0) return this.fail('No pile to pick from');
-    if (pickCardIndex < 0 || pickCardIndex >= this.pile.length) return this.fail('Invalid pick index');
 
     const player = this.findPlayer(userId)!;
-    const pickedCard = this.pile[pickCardIndex];
-    const remainingPile = this.pile.filter((_, i) => i !== pickCardIndex);
-    this.pile = remainingPile;
+    // Draw from the finite deck (monte) — null if exhausted
+    const drawnCard = this.drawPile.length > 0 ? this.drawPile.shift()! : null;
 
-    const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
-    player.hand.splice(clampedInsert, 0, pickedCard);
+    if (drawnCard) {
+      const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
+      player.hand.splice(clampedInsert, 0, drawnCard);
+    }
+
     this.consecutivePasses++;
 
     const events: EngineEvent[] = [];
-    events.push({ type: 'game:turn_passed', payload: { userId, pickedCard } });
-    events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
+    events.push({
+      type: 'game:turn_passed',
+      payload: { userId, drawnCard, drawPileCount: this.drawPile.length },
+    });
+    if (drawnCard) {
+      events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
+    }
 
     const activePlayers = this.activePlayers();
     if (this.consecutivePasses >= activePlayers.length - 1) {
@@ -248,6 +254,7 @@ export class GameEngine {
       currentTurnUserId: this.currentPlayer()?.userId ?? '',
       players: this.players.map(p => this.toPublicPlayer(p)),
       pile: this.pile,
+      drawPileCount: this.drawPile.length,
       market: this.market,
       saborActive: this.saborActive,
       saborMinRequired: this.saborMinRequired,
@@ -402,9 +409,9 @@ export class GameEngine {
     return this.currentPlayer().userId;
   }
 
-  computeBotMove(userId: string): { action: 'play'; cardIndices: number[] } | { action: 'pass'; pickIndex: number } {
+  computeBotMove(userId: string): { action: 'play'; cardIndices: number[] } | { action: 'pass'; insertAtIndex: number } {
     const player = this.findPlayer(userId);
-    if (!player) return { action: 'pass', pickIndex: 0 };
+    if (!player) return { action: 'pass', insertAtIndex: 0 };
 
     const hand = player.hand;
 
@@ -427,8 +434,7 @@ export class GameEngine {
       if (validation.valid) return { action: 'play', cardIndices: group };
     }
 
-    // No legal play — pass
-    const pickIndex = this.pile.length > 0 ? 0 : 0;
-    return { action: 'pass', pickIndex };
+    // No legal play — pass (insert drawn card at end of hand)
+    return { action: 'pass', insertAtIndex: player.hand.length };
   }
 }

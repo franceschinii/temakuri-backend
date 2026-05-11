@@ -51,13 +51,13 @@ describe('deck', () => {
   });
 
   test('dealCards distribui mãos corretas para 2 jogadores (11 cartas cada)', () => {
-    const hands = dealCards(['a', 'b']);
+    const { hands } = dealCards(['a', 'b']);
     expect(hands.get('a')).toHaveLength(11);
     expect(hands.get('b')).toHaveLength(11);
   });
 
   test('dealCards não repete cartas entre jogadores', () => {
-    const hands = dealCards(['a', 'b', 'c', 'd']);
+    const { hands } = dealCards(['a', 'b', 'c', 'd']);
     const all = [...hands.values()].flat().map(c => c.id);
     expect(new Set(all).size).toBe(all.length);
   });
@@ -304,7 +304,7 @@ describe('GameEngine — applyPassTurn', () => {
   test('passar sem pilha é rejeitado', () => {
     const { engine, ids } = makeEngine();
     engine.startRound();
-    const result = engine.applyPassTurn(ids[0], 0, 0);
+    const result = engine.applyPassTurn(ids[0], 0);
     expect(result.success).toBe(false);
     expect(result.reason).toMatch(/No pile/);
   });
@@ -316,7 +316,7 @@ describe('GameEngine — applyPassTurn', () => {
     // P1 joga uma carta
     engine.applyPlayCards(ids[0], [0]);
     // P2 passa
-    const result = engine.applyPassTurn(ids[1], 0, 0);
+    const result = engine.applyPassTurn(ids[1], 0);
     expect(result.success).toBe(true);
     const passedEv = result.events.find(e => e.type === 'game:turn_passed');
     expect(passedEv).toBeDefined();
@@ -329,7 +329,7 @@ describe('GameEngine — applyPassTurn', () => {
     // P1 joga
     engine.applyPlayCards(ids[0], [0]);
     // P2 passa (consecutivePasses = 1 = activePlayers - 1 = 1) → wipe
-    const result = engine.applyPassTurn(ids[1], 0, 0);
+    const result = engine.applyPassTurn(ids[1], 0);
     expect(result.success).toBe(true);
     const wipeEv = result.events.find(e => e.type === 'game:wipe');
     expect(wipeEv).toBeDefined();
@@ -340,7 +340,7 @@ describe('GameEngine — applyPassTurn', () => {
     const { engine, ids } = makeEngine('TRADITIONAL', 2);
     engine.startRound();
     engine.applyPlayCards(ids[0], [0]);
-    engine.applyPassTurn(ids[1], 0, 0); // wipe — ids[0] vence
+    engine.applyPassTurn(ids[1], 0); // wipe — ids[0] vence
     // ids[0] deve poder jogar imediatamente (é o novo turno dele)
     const result = engine.applyPlayCards(ids[0], [0]);
     // Se success=false por outro motivo (ex: mão vazia ou valor menor), não é erro de fase
@@ -356,7 +356,7 @@ describe('GameEngine — applyPassTurn', () => {
     engine.startRound();
     engine.applyPlayCards(ids[0], [0]);
     // insertAtIndex=999 — deve ser clamped para hand.length
-    const result = engine.applyPassTurn(ids[1], 0, 999);
+    const result = engine.applyPassTurn(ids[1], 999);
     expect(result.success).toBe(true);
   });
 });
@@ -390,7 +390,7 @@ describe('GameEngine — modo MERCADO', () => {
     const { engine, ids } = makeEngine('MERCADO', 2);
     engine.startRound();
     engine.applyPlayCards(ids[0], [0]);
-    engine.applyPassTurn(ids[1], 0, 0); // wipe → ids[0] vence
+    engine.applyPassTurn(ids[1], 0); // wipe → ids[0] vence
 
     // ids[1] tenta trocar — deve ser rejeitado
     const fail = engine.applyMarketSwap(ids[1], 0, 0);
@@ -406,7 +406,7 @@ describe('GameEngine — modo MERCADO', () => {
     const { engine, ids } = makeEngine('MERCADO', 2);
     engine.startRound();
     engine.applyPlayCards(ids[0], [0]);
-    engine.applyPassTurn(ids[1], 0, 0); // wipe
+    engine.applyPassTurn(ids[1], 0); // wipe
 
     const fail = engine.applyMarketSwap(ids[0], 99, 0);
     expect(fail.success).toBe(false);
@@ -449,7 +449,7 @@ describe('anti-fraude', () => {
     const { engine, ids } = makeEngine();
     engine.startRound();
     engine.applyPlayCards(ids[0], [0]); // avança para P2
-    const result = engine.applyPassTurn(ids[0], 0, 0); // P1 tenta passar quando é turno de P2
+    const result = engine.applyPassTurn(ids[0], 0); // P1 tenta passar quando é turno de P2
     expect(result.success).toBe(false);
     expect(result.reason).toMatch(/Not your turn/);
   });
@@ -525,7 +525,7 @@ describe('anti-fraude', () => {
     const { engine, ids } = makeEngine();
     engine.startRound();
     engine.applyPlayCards(ids[0], [0]); // pilha tem 1 carta
-    const result = engine.applyPassTurn(ids[1], 5, 0); // index 5 inexistente
+    const result = engine.applyPassTurn(ids[1], 0); // index 5 inexistente
     expect(result.success).toBe(false);
     expect(result.reason).toMatch(/Invalid pick index/);
   });

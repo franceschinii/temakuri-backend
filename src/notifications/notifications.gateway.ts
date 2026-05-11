@@ -221,13 +221,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   @SubscribeMessage('game:pass_turn')
-  handlePassTurn(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; pickCardIndex: number; insertAtIndex: number }) {
+  handlePassTurn(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; insertAtIndex: number }) {
     if (!client.userId) return;
 
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return;
 
-    const result = engine.applyPassTurn(client.userId, data.pickCardIndex, data.insertAtIndex ?? 0);
+    const result = engine.applyPassTurn(client.userId, data.insertAtIndex ?? 0);
     if (!result.success) {
       return this.sendToClient(client, 'game:error', { code: 'INVALID_PICK', message: result.reason });
     }
@@ -276,7 +276,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       if (move.action === 'play') {
         result = currentEngine.applyPlayCards(currentUserId, move.cardIndices);
       } else {
-        result = currentEngine.applyPassTurn(currentUserId, move.pickIndex, 0);
+        result = currentEngine.applyPassTurn(currentUserId, move.insertAtIndex);
       }
 
       if (result.success) {
