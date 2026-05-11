@@ -47,6 +47,12 @@ export class GameEngine {
   private saborTriggersThisGame = 0;
   private tricksWon: Record<string, number> = {};
   private pendingDraws: Map<string, Card> = new Map();
+  private playersWithEmptyHand: Set<string> = new Set();
+  private trickPileForPick: Card[] = [];
+  private isFirstTurn = false;
+  // Modo Duelo (2 jogadores): Pratos do Dia por jogador
+  private duelPlates: Map<string, Card[]> = new Map();
+  private pendingDuelPick: string | null = null; // userId aguardando escolha de Prato do Dia
 
   constructor(roomCode: string, mode: GameMode, handBias = 0) {
     this.roomCode = roomCode;
@@ -93,8 +99,16 @@ export class GameEngine {
     this.drawPile = drawPile;
 
     if (this.mode === 'MERCADO') {
-      // Take market cards from front of draw pile to avoid duplicates
       this.market = this.drawPile.splice(0, MARKET_SIZE);
+    }
+
+    // Modo Duelo: distribuir 2 Pratos do Dia abertos por jogador
+    if (this.isDuel()) {
+      this.duelPlates = new Map();
+      activePlayers.forEach(p => {
+        const plates = this.drawPile.splice(0, 2);
+        this.duelPlates.set(p.userId, plates);
+      });
     }
 
     if (this.lastWiperId) {
@@ -105,6 +119,8 @@ export class GameEngine {
     }
 
     this.phase = 'PLAYER_TURN';
+    this.isFirstTurn = true;
+    this.playersWithEmptyHand = new Set();
 
     const events: EngineEvent[] = [];
 
@@ -147,6 +163,7 @@ export class GameEngine {
     this.pile = playedCards;
     this.consecutivePasses = 0;
     this.lastPlayerId = userId;
+    this.isFirstTurn = false;
 
     const events: EngineEvent[] = [];
 
@@ -165,7 +182,26 @@ export class GameEngine {
     events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
 
     if (player.hand.length === 0) {
-      return { success: true, events: [...events, ...this.resolveRoundEnd(userId)] };
+      this.playersWithEmptyHand.add(userId);
+      const active = this.activePlayers();
+      const stillHaveCards = active.filter(p => !this.playersWithEmptyHand.has(p.userId));
+
+      events.push({ type: 'game:player_hand_empty', payload: { userId } });
+
+      if (stillHaveCards.length === 1) {
+        const loserId = stillHaveCards[0].userId;
+        return { success: true, events: [...events, ...this.resolveRoundEnd(loserId)] };
+      }
+
+      if (stillHaveCards.length === 0) {
+        // Todos esvaziaram ao mesmo tempo — edge case teórico. Nova rodada sem perdedor.
+        return { success: true, events: [...events, ...this.startRound()] };
+      }
+
+      // Mais de 1 ainda com cartas — jogo continua
+      this.advanceTurn();
+      events.push({ type: 'game:turn_started', payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS } });
+      return { success: true, events };
     }
 
     this.advanceTurn();
@@ -216,6 +252,29 @@ export class GameEngine {
     if (this.phase !== 'PLAYER_TURN') return this.fail('Not the right phase');
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
 
+    if (this.isFirstTurn) {
+      return this.fail('Must play cards on first turn');
+    }
+
+    // Modo Duelo: passar = escolher um Prato do Dia, não comprar do monte
+    if (this.isDuel()) {
+      const plates = this.duelPlates.get(userId) ?? [];
+      if (plates.length === 0) {
+        // Sem Pratos do Dia → perde imediatamente
+        return { success: true, events: this.resolveDuelLoss(userId) };
+      }
+      this.pendingDuelPick = userId;
+      this.phase = 'DUEL_PASS_PICK';
+      return {
+        success: true,
+        events: [{
+          type: 'game:duel_pass_offer',
+          payload: { plates },
+          targetUserId: userId,
+        }],
+      };
+    }
+
     // Deck exhausted: resolve immediately as a pass with no card
     if (this.drawPile.length === 0) {
       return this.applyPassTurn(userId, 0);
@@ -235,7 +294,62 @@ export class GameEngine {
     };
   }
 
-  applyInsertDrawn(userId: string, insertAtIndex: number): EngineResult {
+  // Modo Duelo: jogador escolhe um Prato do Dia para colocar na mão ou descartar
+  applyDuelPassPick(userId: string, plateIndex: number, action: 'insert' | 'discard', insertAtIndex = 0): EngineResult {
+    if (this.phase !== 'DUEL_PASS_PICK') return this.fail('Not in duel pass pick phase');
+    if (this.pendingDuelPick !== userId) return this.fail('Not your turn');
+
+    const plates = this.duelPlates.get(userId) ?? [];
+    if (plateIndex < 0 || plateIndex >= plates.length) return this.fail('Invalid plate index');
+
+    const pickedPlate = plates[plateIndex];
+    const remainingPlates = plates.filter((_, i) => i !== plateIndex);
+    this.duelPlates.set(userId, remainingPlates);
+    this.pendingDuelPick = null;
+    this.phase = 'PLAYER_TURN';
+
+    const player = this.findPlayer(userId)!;
+    const events: EngineEvent[] = [];
+
+    if (action === 'insert') {
+      const clamped = Math.max(0, Math.min(insertAtIndex, player.hand.length));
+      player.hand.splice(clamped, 0, pickedPlate);
+      events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
+    }
+
+    this.consecutivePasses++;
+    events.push({
+      type: 'game:duel_plate_used',
+      payload: { userId, plateIndex, action, remainingPlates, drawnCard: action === 'insert' ? pickedPlate : null },
+    });
+
+    const activePlayers = this.activePlayers();
+    if (this.consecutivePasses >= activePlayers.length - 1) {
+      const wipeWinner = this.lastPlayerId ?? userId;
+      return { success: true, events: [...events, ...this.resolveWipe(wipeWinner)] };
+    }
+
+    this.advanceTurn();
+    events.push({ type: 'game:turn_started', payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS } });
+    return { success: true, events };
+  }
+
+  private resolveDuelLoss(loserId: string): EngineEvent[] {
+    // Sem Pratos do Dia → perde a batalha imediatamente (perde 1 token, rodada encerra)
+    return this.resolveRoundEnd(loserId);
+  }
+
+  isDuel(): boolean {
+    return this.activePlayers().length === 2;
+  }
+
+  getDuelPlates(): Record<string, Card[]> {
+    const result: Record<string, Card[]> = {};
+    this.duelPlates.forEach((plates, userId) => { result[userId] = plates; });
+    return result;
+  }
+
+  applyInsertDrawn(userId: string, insertAtIndex: number, action: 'insert' | 'discard' = 'insert'): EngineResult {
     if (this.phase !== 'PASS_PICK') return this.fail('Not in pick phase');
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
 
@@ -244,19 +358,23 @@ export class GameEngine {
     this.phase = 'PLAYER_TURN';
 
     const player = this.findPlayer(userId)!;
-    if (drawnCard) {
+    let cardAddedToHand = false;
+
+    if (action === 'insert' && drawnCard) {
       const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
       player.hand.splice(clampedInsert, 0, drawnCard);
+      cardAddedToHand = true;
     }
+    // 'discard': drawnCard é simplesmente descartado sem adicionar à mão
 
     this.consecutivePasses++;
 
     const events: EngineEvent[] = [];
     events.push({
       type: 'game:turn_passed',
-      payload: { userId, drawnCard, drawPileCount: this.drawPile.length },
+      payload: { userId, drawnCard: cardAddedToHand ? drawnCard : null, drawPileCount: this.drawPile.length },
     });
-    if (drawnCard) {
+    if (cardAddedToHand) {
       events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
     }
 
@@ -325,6 +443,8 @@ export class GameEngine {
       saborMinRequired: this.saborMinRequired,
       consecutivePasses: this.consecutivePasses,
       myHand: this.findPlayer(userId)?.hand ?? [],
+      duelPlates: this.isDuel() ? this.getDuelPlates() : null,
+      myDuelPlates: this.isDuel() ? (this.duelPlates.get(userId) ?? null) : null,
     };
   }
 
@@ -338,46 +458,74 @@ export class GameEngine {
 
   private resolveWipe(wiperId: string): EngineEvent[] {
     this.lastWiperId = wiperId;
-    this.pile = [];
+    this.tricksWon[wiperId] = (this.tricksWon[wiperId] ?? 0) + 1;
+    this.consecutivePasses = 0;
     this.saborActive = false;
     this.saborMinRequired = 0;
-    this.consecutivePasses = 0;
-    this.tricksWon[wiperId] = (this.tricksWon[wiperId] ?? 0) + 1;
 
     const wiperIndex = this.activePlayers().findIndex(p => p.userId === wiperId);
     this.currentTurnIndex = wiperIndex;
-    this.phase = 'WIPE_RESOLUTION';
 
-    this.phase = 'PLAYER_TURN';
+    this.trickPileForPick = [...this.pile];
+    this.phase = 'TRICK_PICK';
 
-    const events: EngineEvent[] = [{ type: 'game:wipe', payload: { winnerId: wiperId } }];
-    events.push({ type: 'game:turn_started', payload: { userId: wiperId, timeoutMs: TURN_TIMEOUT_MS } });
-    return events;
+    return [
+      { type: 'game:wipe', payload: { winnerId: wiperId, pileCount: this.trickPileForPick.length } },
+      {
+        type: 'game:trick_pick_offer',
+        payload: { pile: this.trickPileForPick },
+        targetUserId: wiperId,
+      },
+    ];
   }
 
-  private resolveRoundEnd(winnerId: string): EngineEvent[] {
+  applyTrickPick(userId: string, action: 'take' | 'discard', insertAtIndex = 0): EngineResult {
+    if (this.phase !== 'TRICK_PICK') return this.fail('Not in trick pick phase');
+    if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
+
+    const events: EngineEvent[] = [];
+    const player = this.findPlayer(userId)!;
+
+    if (action === 'take') {
+      const clamped = Math.max(0, Math.min(insertAtIndex, player.hand.length));
+      player.hand.splice(clamped, 0, ...this.trickPileForPick);
+      events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
+    }
+
+    this.trickPileForPick = [];
+    this.pile = [];
+    this.phase = 'PLAYER_TURN';
+
+    events.push({ type: 'game:turn_started', payload: { userId, timeoutMs: TURN_TIMEOUT_MS } });
+    return { success: true, events };
+  }
+
+  getTrickPileForPick(): Card[] { return this.trickPileForPick; }
+
+  private resolveRoundEnd(loserId: string): EngineEvent[] {
     this.phase = 'ROUND_END';
 
-    const active = this.activePlayers();
-    const losers = active.filter(p => p.userId !== winnerId);
-    losers.forEach(p => { p.tokensLeft = Math.max(0, p.tokensLeft - 1); });
+    const loser = this.findPlayer(loserId);
+    if (loser) {
+      loser.tokensLeft = Math.max(0, loser.tokensLeft - 1);
+    }
 
     const playerTokens: Record<string, number> = {};
     this.players.forEach(p => { playerTokens[p.userId] = p.tokensLeft; });
 
     const events: EngineEvent[] = [{
       type: 'game:round_ended',
-      payload: { loserIds: losers.map(p => p.userId), playerTokens },
+      payload: { loserIds: [loserId], playerTokens },
     }];
 
-    const justEliminated = losers.filter(p => p.tokensLeft === 0);
-    justEliminated.forEach((p, i) => {
-      p.isEliminated = true;
-      events.push({ type: 'game:player_eliminated', payload: { userId: p.userId, placement: this.activePlayers().length - i } });
-    });
+    if (loser && loser.tokensLeft === 0) {
+      loser.isEliminated = true;
+      events.push({ type: 'game:player_eliminated', payload: { userId: loserId, placement: this.activePlayers().length + 1 } });
+    }
 
     const stillActive = this.activePlayers();
     if (stillActive.length <= 1) {
+      const winnerId = stillActive[0]?.userId ?? loserId;
       return [...events, ...this.resolveGameOver(winnerId)];
     }
 
@@ -385,7 +533,7 @@ export class GameEngine {
       this.rotateHands();
     }
 
-    this.lastWiperId = winnerId;
+    this.lastWiperId = null;
     return [...events, ...this.startRound()];
   }
 

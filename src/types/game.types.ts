@@ -23,6 +23,8 @@ export type GamePhase =
   | 'DEALING'
   | 'PLAYER_TURN'
   | 'PASS_PICK'
+  | 'TRICK_PICK'
+  | 'DUEL_PASS_PICK'
   | 'WIPE_RESOLUTION'
   | 'ROUND_END'
   | 'GAME_OVER';
@@ -62,6 +64,9 @@ export interface ClientGameState {
   saborMinRequired: number;
   consecutivePasses: number;
   myHand: Card[];
+  // Duelo: Pratos do Dia de cada jogador (chave = userId)
+  duelPlates: Record<string, Card[]> | null;
+  myDuelPlates: Card[] | null;
 }
 
 export interface GameRanking {
