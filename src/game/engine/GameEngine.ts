@@ -372,7 +372,12 @@ export class GameEngine {
     const events: EngineEvent[] = [];
     events.push({
       type: 'game:turn_passed',
-      payload: { userId, drawnCard: cardAddedToHand ? drawnCard : null, drawPileCount: this.drawPile.length },
+      payload: {
+        userId,
+        drawnCard: cardAddedToHand ? drawnCard : null,
+        discardedCard: !cardAddedToHand && drawnCard ? drawnCard : null,
+        drawPileCount: this.drawPile.length,
+      },
     });
     if (cardAddedToHand) {
       events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });

@@ -31,7 +31,7 @@ export const HAND_SIZE: Record<number, number> = {
   6: 8,
 };
 
-export const INITIAL_TOKENS = 3;
+export const INITIAL_TOKENS = 2;
 export const TURN_TIMEOUT_MS = 30_000;
 export const MARKET_SIZE = 3;
 export const STARTING_COUNTDOWN_MS = 3_000;
