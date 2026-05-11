@@ -30,15 +30,14 @@ export function beatsPlay(
   saborMinRequired: number,
 ): { valid: boolean; reason?: string } {
   if (saborActive) {
-    const breaksSabor = !isSameCategory(played) && played.length >= saborMinRequired;
-    const exceedsRequirement = played.length > saborMinRequired;
-
-    if (!breaksSabor && !exceedsRequirement) {
+    if (played.length < saborMinRequired) {
       return {
         valid: false,
-        reason: `Sabor ativo: jogue mais de ${saborMinRequired} carta(s) ou quebre com categorias mistas`,
+        reason: `Sabor ativo: jogue pelo menos ${saborMinRequired} carta(s)`,
       };
     }
+    // Quebrar: categorias mistas com count suficiente — válido (passa para check normal)
+    // Continuar: mesmo count ou mais com mesma/qualquer categoria — check normal decide
   }
 
   if (pile.length === 0) return { valid: true };

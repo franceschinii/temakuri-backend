@@ -33,6 +33,7 @@ export class GameEngine {
   private round = 0;
   private currentTurnIndex = 0;
   private pile: Card[] = [];
+  private drawPile: Card[] = [];
   private market: Card[] | null = null;
   private saborActive = false;
   private saborMinRequired = 0;
@@ -44,6 +45,7 @@ export class GameEngine {
   private turnTimer: NodeJS.Timeout | null = null;
   private saborTriggersThisGame = 0;
   private tricksWon: Record<string, number> = {};
+  private pendingDraws: Map<string, Card> = new Map();
 
   constructor(roomCode: string, mode: GameMode) {
     this.roomCode = roomCode;
@@ -84,13 +86,13 @@ export class GameEngine {
     this.phase = 'DEALING';
 
     const activePlayers = this.activePlayers();
-    const hands = dealCards(activePlayers.map(p => p.userId));
+    const { hands, drawPile } = dealCards(activePlayers.map(p => p.userId));
     activePlayers.forEach(p => { p.hand = hands.get(p.userId) ?? []; });
+    this.drawPile = drawPile;
 
     if (this.mode === 'MERCADO') {
-      const deck = shuffle(buildDeck());
-      const usedIds = new Set(activePlayers.flatMap(p => p.hand.map(c => c.id)));
-      this.market = deck.filter(c => !usedIds.has(c.id)).slice(0, MARKET_SIZE);
+      // Take market cards from front of draw pile to avoid duplicates
+      this.market = this.drawPile.splice(0, MARKET_SIZE);
     }
 
     if (this.lastWiperId) {
@@ -170,24 +172,89 @@ export class GameEngine {
     return { success: true, events };
   }
 
-  applyPassTurn(userId: string, pickCardIndex: number, insertAtIndex: number): EngineResult {
-    if (this.phase !== 'PLAYER_TURN' && this.phase !== 'PASS_PICK') return this.fail('Not the right phase');
+  applyPassTurn(userId: string, insertAtIndex: number): EngineResult {
+    if (this.phase !== 'PLAYER_TURN') return this.fail('Not the right phase');
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
-    if (this.pile.length === 0) return this.fail('No pile to pick from');
-    if (pickCardIndex < 0 || pickCardIndex >= this.pile.length) return this.fail('Invalid pick index');
 
     const player = this.findPlayer(userId)!;
-    const pickedCard = this.pile[pickCardIndex];
-    const remainingPile = this.pile.filter((_, i) => i !== pickCardIndex);
-    this.pile = remainingPile;
+    // Draw from the finite deck (monte) — null if exhausted
+    const drawnCard = this.drawPile.length > 0 ? this.drawPile.shift()! : null;
 
-    const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
-    player.hand.splice(clampedInsert, 0, pickedCard);
+    if (drawnCard) {
+      const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
+      player.hand.splice(clampedInsert, 0, drawnCard);
+    }
+
     this.consecutivePasses++;
 
     const events: EngineEvent[] = [];
-    events.push({ type: 'game:turn_passed', payload: { userId, pickedCard } });
-    events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
+    events.push({
+      type: 'game:turn_passed',
+      payload: { userId, drawnCard, drawPileCount: this.drawPile.length },
+    });
+    if (drawnCard) {
+      events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
+    }
+
+    const activePlayers = this.activePlayers();
+    if (this.consecutivePasses >= activePlayers.length - 1) {
+      const wipeWinner = this.lastPlayerId ?? userId;
+      return { success: true, events: [...events, ...this.resolveWipe(wipeWinner)] };
+    }
+
+    this.advanceTurn();
+    events.push({ type: 'game:turn_started', payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS } });
+
+    return { success: true, events };
+  }
+
+  applyDrawCard(userId: string): EngineResult {
+    if (this.phase !== 'PLAYER_TURN') return this.fail('Not the right phase');
+    if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
+
+    // Deck exhausted: resolve immediately as a pass with no card
+    if (this.drawPile.length === 0) {
+      return this.applyPassTurn(userId, 0);
+    }
+
+    const card = this.drawPile.shift()!;
+    this.pendingDraws.set(userId, card);
+    this.phase = 'PASS_PICK';
+
+    return {
+      success: true,
+      events: [{
+        type: 'game:card_drawn',
+        payload: { card, drawPileCount: this.drawPile.length },
+        targetUserId: userId,
+      }],
+    };
+  }
+
+  applyInsertDrawn(userId: string, insertAtIndex: number): EngineResult {
+    if (this.phase !== 'PASS_PICK') return this.fail('Not in pick phase');
+    if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
+
+    const drawnCard = this.pendingDraws.get(userId) ?? null;
+    this.pendingDraws.delete(userId);
+    this.phase = 'PLAYER_TURN';
+
+    const player = this.findPlayer(userId)!;
+    if (drawnCard) {
+      const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
+      player.hand.splice(clampedInsert, 0, drawnCard);
+    }
+
+    this.consecutivePasses++;
+
+    const events: EngineEvent[] = [];
+    events.push({
+      type: 'game:turn_passed',
+      payload: { userId, drawnCard, drawPileCount: this.drawPile.length },
+    });
+    if (drawnCard) {
+      events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
+    }
 
     const activePlayers = this.activePlayers();
     if (this.consecutivePasses >= activePlayers.length - 1) {
@@ -248,6 +315,7 @@ export class GameEngine {
       currentTurnUserId: this.currentPlayer()?.userId ?? '',
       players: this.players.map(p => this.toPublicPlayer(p)),
       pile: this.pile,
+      drawPileCount: this.drawPile.length,
       market: this.market,
       saborActive: this.saborActive,
       saborMinRequired: this.saborMinRequired,
@@ -396,5 +464,38 @@ export class GameEngine {
 
   getMode(): GameMode {
     return this.mode;
+  }
+
+  currentTurnUserId(): string {
+    return this.currentPlayer().userId;
+  }
+
+  computeBotMove(userId: string): { action: 'play'; cardIndices: number[] } | { action: 'pass'; insertAtIndex: number } {
+    const player = this.findPlayer(userId);
+    if (!player) return { action: 'pass', insertAtIndex: 0 };
+
+    const hand = player.hand;
+
+    // Group adjacent indices by value
+    for (let start = 0; start < hand.length; start++) {
+      const group: number[] = [start];
+      for (let j = start + 1; j < hand.length; j++) {
+        if (hand[j].value === hand[start].value) group.push(j);
+        else break;
+      }
+
+      const validation = validatePlayIndices(
+        hand,
+        group,
+        this.pile,
+        this.saborActive,
+        this.saborMinRequired,
+      );
+
+      if (validation.valid) return { action: 'play', cardIndices: group };
+    }
+
+    // No legal play — pass (insert drawn card at end of hand)
+    return { action: 'pass', insertAtIndex: player.hand.length };
   }
 }

@@ -20,7 +20,7 @@ export const CATEGORY_DISPLAY: Record<FoodCategory, string> = {
   DESSERT: 'Mochi',
 };
 
-export const CARDS_PER_VALUE = 9;
+export const CARDS_PER_VALUE = 7;
 export const VALUES = [1, 2, 3, 4, 5, 6, 7] as const;
 
 export const HAND_SIZE: Record<number, number> = {

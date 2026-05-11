@@ -8,3 +8,4 @@ import { RoomsService } from './rooms.service.js';
   exports: [RoomsService],
 })
 export class RoomsModule {}
+// EventEmitter2 é providenciado globalmente pelo EventEmitterModule em AppModule.
