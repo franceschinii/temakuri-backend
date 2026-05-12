@@ -15,6 +15,37 @@ export class RoomsService {
     private events: EventEmitter2,
   ) {}
 
+  async createMatchmakingRoom(hostId: string, dto: CreateRoomDto) {
+    let code: string;
+    let attempts = 0;
+    do {
+      code = generateCode();
+      attempts++;
+      if (attempts > 20) throw new BadRequestException('Could not generate unique room code');
+    } while (await this.prisma.room.findUnique({ where: { code } }));
+
+    const room = await this.prisma.room.create({
+      data: {
+        code,
+        hostId,
+        mode: dto.mode,
+        maxPlayers: dto.maxPlayers,
+        isPrivate: dto.isPrivate ?? false,
+        isRanked: dto.isRanked ?? false,
+        handBias: dto.handBias ?? 0,
+        initialTokens: dto.initialTokens ?? 2,
+        status: 'WAITING',
+        players: {
+          create: { userId: hostId, seat: 0, status: 'CONNECTED' },
+        },
+      },
+      include: { players: { include: { user: true } } },
+    });
+
+    if (!room.isPrivate) this.events.emit('rooms.public.changed');
+    return this.formatRoom(room);
+  }
+
   async create(hostId: string, dto: CreateRoomDto) {
     if (dto.isRanked) {
       if (dto.mode !== 'TRADITIONAL') {

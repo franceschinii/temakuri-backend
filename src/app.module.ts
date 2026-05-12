@@ -8,6 +8,7 @@ import { ProfileModule } from './profile/profile.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { AdminModule } from './admin/admin.module.js';
 import { ShopModule } from './shop/shop.module.js';
+import { MatchmakingModule } from './matchmaking/matchmaking.module.js';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { ShopModule } from './shop/shop.module.js';
     NotificationsModule,
     AdminModule,
     ShopModule,
+    MatchmakingModule,
   ],
 })
 export class AppModule {}

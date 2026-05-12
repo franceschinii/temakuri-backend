@@ -205,6 +205,7 @@ export class AuthService {
       lossStreak: rest.lossStreak ?? 0,
       rankedWarnings: rest.rankedWarnings ?? 0,
       rankedSuspendedUntil: rest.rankedSuspendedUntil ?? null,
+      isPremium: rest.isPremium ?? false,
     };
   }
 }

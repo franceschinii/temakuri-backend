@@ -20,6 +20,7 @@ const USER_SELECT = {
   pds: true,
   rankedWarnings: true,
   rankedSuspendedUntil: true,
+  isPremium: true,
   createdAt: true,
   stats: {
     select: {
@@ -183,6 +184,7 @@ export class AdminService {
     if (dto.pds !== undefined) userUpdate.pds = dto.pds;
     if (dto.rankedWarnings !== undefined) userUpdate.rankedWarnings = dto.rankedWarnings;
     if (dto.clearRankedSuspension) userUpdate.rankedSuspendedUntil = null;
+    if (dto.isPremium !== undefined) userUpdate.isPremium = dto.isPremium;
 
     if (Object.keys(userUpdate).length > 0) {
       await this.prisma.user.update({ where: { id }, data: userUpdate });

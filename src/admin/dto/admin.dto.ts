@@ -85,6 +85,10 @@ export class UpdateProgressionDto {
   clearRankedSuspension?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  isPremium?: boolean;
+
+  @IsOptional()
   @IsArray()
   @IsInt({ each: true })
   grantAvatars?: number[];

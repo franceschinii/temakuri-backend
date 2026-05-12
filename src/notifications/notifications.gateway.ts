@@ -9,6 +9,7 @@ import {
   WsException,
 } from '@nestjs/websockets';
 import { OnEvent } from '@nestjs/event-emitter';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Server, WebSocket } from 'ws';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -16,6 +17,7 @@ import { RoomManager } from '../game/room-manager.js';
 import { RoomsService } from '../rooms/rooms.service.js';
 import { EngineEvent } from '../game/engine/GameEngine.js';
 import { WS_HEARTBEAT_INTERVAL, STARTING_COUNTDOWN_MS } from '../common/constants/game.constants.js';
+import type { QueueEntry } from '../matchmaking/matchmaking.service.js';
 
 interface AuthenticatedSocket extends WebSocket {
   userId?: string;
@@ -43,6 +45,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     private config: ConfigService,
     private roomManager: RoomManager,
     private roomsService: RoomsService,
+    private events: EventEmitter2,
   ) {}
 
   afterInit() {
@@ -88,7 +91,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     const userSet = this.userSockets.get(client.userId);
     if (userSet) {
       userSet.delete(client);
-      if (userSet.size === 0) this.userSockets.delete(client.userId);
+      if (userSet.size === 0) {
+        this.userSockets.delete(client.userId);
+        // Only remove from matchmaking queue when the user has no remaining sockets
+        this.events.emit('matchmaking.user_disconnected', { userId: client.userId });
+      }
     }
 
     if (client.roomCode) {
@@ -499,6 +506,81 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     const room = await this.roomsService.findByCode(roomCode).catch(() => null);
     if (!room?.isRanked) return;
     await this.roomsService.applyRankedAbandonment(userId);
+  }
+
+  @OnEvent('matchmaking.found')
+  async handleMatchmakingFound(payload: { roomCode: string; players: QueueEntry[]; createdByUserId: string }) {
+    const { roomCode, players } = payload;
+    const CONFIRM_TIMEOUT_MS = 120_000;
+
+    if (!this.roomReadyMap.has(roomCode)) {
+      this.roomReadyMap.set(roomCode, new Set());
+    }
+
+    for (const player of players) {
+      try {
+        await this.roomsService.joinRoom(player.userId, roomCode);
+        this.roomReadyMap.get(roomCode)!.add(player.userId);
+
+        const userSocketSet = this.userSockets.get(player.userId);
+        if (userSocketSet) {
+          for (const sock of userSocketSet) {
+            if (!this.roomSockets.has(roomCode)) this.roomSockets.set(roomCode, new Set());
+            this.roomSockets.get(roomCode)!.add(sock);
+            sock.roomCode = roomCode;
+          }
+        }
+      } catch {
+        // Player may have disconnected between match formation and join — skip
+      }
+    }
+
+    const matchPayload = {
+      roomCode,
+      players: players.map(p => ({
+        userId: p.userId,
+        username: p.username,
+        avatarIndex: p.avatarIndex,
+        level: p.level,
+        pds: p.pds,
+      })),
+    };
+
+    for (const player of players) {
+      this.sendToUser(player.userId, 'matchmaking:match_found', matchPayload);
+    }
+
+    // Auto-start after CONFIRM_TIMEOUT_MS regardless of confirmation state
+    setTimeout(async () => {
+      const room = await this.roomsService.findByCode(roomCode).catch(() => null);
+      if (!room || room.status !== 'WAITING') return;
+
+      const humanPlayers = room.players.filter((p: any) => !p.isBot);
+      if (humanPlayers.length < 2) return;
+
+      this.broadcastToRoom(roomCode, 'lobby:game_starting', { countdown: STARTING_COUNTDOWN_MS });
+
+      setTimeout(async () => {
+        const freshRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
+        if (!freshRoom || freshRoom.status !== 'WAITING') return;
+
+        this.roomReadyMap.delete(roomCode);
+
+        const engine = this.roomManager.create(roomCode, freshRoom.mode as any, freshRoom.handBias ?? 0, freshRoom.initialTokens ?? 2);
+        freshRoom.players.forEach((p: any) => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat));
+
+        await this.roomsService.markStarted(roomCode);
+
+        const events = engine.startRound();
+        this.dispatchEvents(roomCode, events);
+      }, STARTING_COUNTDOWN_MS);
+    }, CONFIRM_TIMEOUT_MS);
+  }
+
+  @OnEvent('matchmaking.user_disconnected')
+  handleMatchmakingUserDisconnected(_payload: { userId: string }) {
+    // MatchmakingGateway handles its own disconnect via handleDisconnect.
+    // This event exists for future cross-module listeners.
   }
 
   @OnEvent('rooms.lobby.changed')

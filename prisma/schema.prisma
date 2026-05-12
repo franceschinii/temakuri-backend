@@ -16,6 +16,7 @@ model User {
   isBot        Boolean   @default(false)
   isAdmin      Boolean   @default(false)
   isBanned     Boolean   @default(false)
+  isPremium    Boolean   @default(false)
   suspendedUntil DateTime?
   avatarIndex  Int       @default(0)
   xp           Int       @default(0)
