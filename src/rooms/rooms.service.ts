@@ -132,6 +132,15 @@ export class RoomsService {
 
     // Gate de modo para não-TRADITIONAL (apenas para novos membros, não para reconexão)
     const existing = room.players.find(p => p.userId === userId);
+    if (!existing && room.isRanked) {
+      const joiner = await this.prisma.user.findUnique({ where: { id: userId }, select: { isGuest: true, isBot: true, level: true, rankedSuspendedUntil: true } });
+      if (!joiner || joiner.isGuest || joiner.isBot) throw new ForbiddenException('Convidados não podem jogar ranqueadas');
+      if ((joiner.level ?? 1) < 10) throw new ForbiddenException('Ranqueada requer nível 10 ou superior');
+      if (joiner.rankedSuspendedUntil && joiner.rankedSuspendedUntil > new Date()) {
+        const until = joiner.rankedSuspendedUntil.toLocaleDateString('pt-BR');
+        throw new ForbiddenException(`Você está suspenso da ranqueada até ${until}`);
+      }
+    }
     if (!existing && room.mode !== 'TRADITIONAL') {
       const inv = await this.prisma.userInventory.findUnique({ where: { userId } });
       if (!inv || !inv.unlockedModes.includes(room.mode)) {
@@ -364,6 +373,7 @@ export class RoomsService {
         pdsDelta = calcPdsChange(r.placement, totalPlayers, user.winStreak ?? 0, user.lossStreak ?? 0);
         newPds = clampPds((user.pds ?? 0) + pdsDelta, user.pds ?? 0);
 
+        const existingStats = await this.prisma.rankedStats.findUnique({ where: { userId: r.userId }, select: { peakPds: true } });
         await this.prisma.rankedStats.upsert({
           where: { userId: r.userId },
           create: {
@@ -374,7 +384,7 @@ export class RoomsService {
           },
           update: {
             ...(isWinner ? { rankedWins: { increment: 1 } } : { rankedLosses: { increment: 1 } }),
-            ...(newPds > (user.pds ?? 0) ? { peakPds: newPds } : {}),
+            ...(newPds > (existingStats?.peakPds ?? 0) ? { peakPds: newPds } : {}),
           },
         });
       }
@@ -450,6 +460,10 @@ export class RoomsService {
 
     if (!updated.isPrivate) this.events.emit('rooms.public.changed');
     return this.formatRoom(updated);
+  }
+
+  async getUserForAbandonment(userId: string) {
+    return this.prisma.user.findUnique({ where: { id: userId }, select: { isBot: true, isGuest: true } });
   }
 
   async applyRankedAbandonment(userId: string) {
@@ -546,6 +560,7 @@ export class RoomsService {
         isReady: false,
         isConnected: rp.status === 'CONNECTED',
         isBot: rp.user?.isBot ?? false,
+        isAdmin: rp.user?.isAdmin ?? false,
         isSpectator: rp.status === 'SPECTATOR',
         sessionWins: rp.sessionWins ?? 0,
       })),

@@ -37,6 +37,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   private turnTimers = new Map<string, NodeJS.Timeout>(); // roomCode → timer
   private heartbeatInterval: NodeJS.Timeout;
   private roomReadyMap = new Map<string, Set<string>>(); // roomCode → Set<userId prontos>
+  private matchmakingRooms = new Set<string>(); // roomCodes criados via matchmaking
   private chatCooldowns = new Map<string, number>(); // userId → timestamp último envio
   private reactionCooldowns = new Map<string, number>(); // userId → timestamp última reação
 
@@ -113,10 +114,27 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         this.applyRankedAbandonmentIfNeeded(client.userId, client.roomCode).catch(() => {});
       } else {
         // Room in WAITING: remove guest immediately (they only exist while connected)
-        this.roomsService.leaveRoomIfGuest(client.userId, client.roomCode).then(removed => {
+        const disconnectedRoomCode = client.roomCode;
+        this.roomsService.leaveRoomIfGuest(client.userId, disconnectedRoomCode).then(async removed => {
           if (removed) {
-            this.roomsService.findByCode(client.roomCode!).then(room => {
-              this.broadcastToRoom(client.roomCode!, 'lobby:room_updated', { room });
+            // Verifica se sala de matchmaking ficou sem humanos após a saída do guest
+            if (this.matchmakingRooms.has(disconnectedRoomCode!)) {
+              const room = await this.roomsService.findByCode(disconnectedRoomCode!).catch(() => null);
+              if (!room || room.status !== 'WAITING') {
+                this.matchmakingRooms.delete(disconnectedRoomCode!);
+              } else {
+                const humanPlayers = room.players.filter((p: any) => !p.isBot);
+                if (humanPlayers.length === 0) {
+                  await this.roomsService.leaveRoom(room.hostId, disconnectedRoomCode!).catch(() => {});
+                  this.roomReadyMap.delete(disconnectedRoomCode!);
+                  this.matchmakingRooms.delete(disconnectedRoomCode!);
+                  this.roomSockets.delete(disconnectedRoomCode!);
+                  return;
+                }
+              }
+            }
+            this.roomsService.findByCode(disconnectedRoomCode!).then(room => {
+              this.broadcastToRoom(disconnectedRoomCode!, 'lobby:room_updated', { room });
             }).catch(() => {});
           }
         }).catch(() => {});
@@ -199,10 +217,26 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (roomSet) roomSet.delete(client);
 
     this.broadcastToRoom(data.roomCode, 'lobby:player_left', { userId: client.userId });
+
+    // Fecha sala de matchmaking se não restarem jogadores humanos em WAITING
+    if (this.matchmakingRooms.has(data.roomCode)) {
+      const room = await this.roomsService.findByCode(data.roomCode).catch(() => null);
+      if (!room || room.status !== 'WAITING') {
+        this.matchmakingRooms.delete(data.roomCode);
+      } else {
+        const humanPlayers = room.players.filter((p: any) => !p.isBot);
+        if (humanPlayers.length === 0) {
+          await this.roomsService.leaveRoom(room.hostId, data.roomCode).catch(() => {});
+          this.roomReadyMap.delete(data.roomCode);
+          this.matchmakingRooms.delete(data.roomCode);
+          this.roomSockets.delete(data.roomCode);
+        }
+      }
+    }
   }
 
   @SubscribeMessage('lobby:set_ready')
-  handleSetReady(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; ready: boolean }) {
+  async handleSetReady(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; ready: boolean }) {
     if (!client.userId) return;
 
     const engine = this.roomManager.get(data.roomCode);
@@ -218,6 +252,36 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
 
     this.broadcastToRoom(data.roomCode, 'lobby:player_ready', { userId: client.userId, ready: data.ready });
+
+    // Auto-start para salas de matchmaking quando todos os humanos confirmam
+    if (this.matchmakingRooms.has(data.roomCode)) {
+      const room = await this.roomsService.findByCode(data.roomCode).catch(() => null);
+      if (room && room.status === 'WAITING') {
+        const humanPlayers = room.players.filter((p: any) => !p.isBot);
+        const readySet = this.roomReadyMap.get(data.roomCode) ?? new Set<string>();
+        const allReady = humanPlayers.length >= 1 && humanPlayers.every((p: any) => readySet.has(p.userId));
+        if (allReady) {
+          this.broadcastToRoom(data.roomCode, 'lobby:game_starting', { countdown: STARTING_COUNTDOWN_MS });
+          setTimeout(async () => {
+            const freshRoom = await this.roomsService.findByCode(data.roomCode).catch(() => null);
+            if (!freshRoom || freshRoom.status !== 'WAITING') return;
+            await this.roomsService.fillWithBots(data.roomCode);
+            const filledRoom = await this.roomsService.findByCode(data.roomCode).catch(() => null);
+            if (!filledRoom || filledRoom.status !== 'WAITING') return;
+            this.roomReadyMap.delete(data.roomCode);
+            this.matchmakingRooms.delete(data.roomCode);
+            const engine = this.roomManager.create(data.roomCode, filledRoom.mode as any, filledRoom.handBias ?? 0, filledRoom.initialTokens ?? 2);
+            filledRoom.players.forEach((p: any) => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: p.isBot, isAdmin: p.isAdmin, level: p.level, pds: p.pds, sessionWins: p.sessionWins }));
+            const bots = new Set<string>(filledRoom.players.filter((p: any) => p.isBot).map((p: any) => p.userId));
+            this.roomBots.set(data.roomCode, bots);
+            await this.roomsService.markStarted(data.roomCode);
+            const events = engine.startRound();
+            this.dispatchEvents(data.roomCode, events);
+            this.scheduleBotMoveIfNeeded(data.roomCode, engine);
+          }, STARTING_COUNTDOWN_MS);
+        }
+      }
+    }
   }
 
   @SubscribeMessage('lobby:start_game')
@@ -248,7 +312,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       this.roomReadyMap.delete(data.roomCode);
 
       const engine = this.roomManager.create(data.roomCode, room.mode as any, room.handBias ?? 0, room.initialTokens ?? 2);
-      room.players.forEach(p => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat));
+      room.players.forEach(p => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: (p as any).isBot, isAdmin: (p as any).isAdmin, level: (p as any).level, pds: (p as any).pds, sessionWins: (p as any).sessionWins }));
 
       const bots = new Set<string>(room.players.filter(p => p.isBot).map(p => p.userId));
       this.roomBots.set(data.roomCode, bots);
@@ -503,8 +567,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   private async applyRankedAbandonmentIfNeeded(userId: string, roomCode: string) {
+    const engine = this.roomManager.get(roomCode);
+    if (engine?.isGameOver()) return; // game already finished, no penalty
     const room = await this.roomsService.findByCode(roomCode).catch(() => null);
     if (!room?.isRanked) return;
+    const user = await this.roomsService.getUserForAbandonment(userId);
+    if (!user || user.isBot || user.isGuest) return;
     await this.roomsService.applyRankedAbandonment(userId);
   }
 
@@ -517,10 +585,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       this.roomReadyMap.set(roomCode, new Set());
     }
 
+    // Registra como sala de matchmaking para permitir auto-start via handleSetReady
+    this.matchmakingRooms.add(roomCode);
+
     for (const player of players) {
       try {
         await this.roomsService.joinRoom(player.userId, roomCode);
-        this.roomReadyMap.get(roomCode)!.add(player.userId);
 
         const userSocketSet = this.userSockets.get(player.userId);
         if (userSocketSet) {
@@ -553,31 +623,48 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     // Auto-start after CONFIRM_TIMEOUT_MS regardless of confirmation state
     setTimeout(async () => {
       const room = await this.roomsService.findByCode(roomCode).catch(() => null);
-      if (!room || room.status !== 'WAITING') return;
+      if (!room || room.status !== 'WAITING') {
+        this.matchmakingRooms.delete(roomCode);
+        return;
+      }
 
       const humanPlayers = room.players.filter((p: any) => !p.isBot);
-      if (humanPlayers.length < 2) return;
+      if (humanPlayers.length < 1) {
+        this.matchmakingRooms.delete(roomCode);
+        return;
+      }
 
       this.broadcastToRoom(roomCode, 'lobby:game_starting', { countdown: STARTING_COUNTDOWN_MS });
 
       setTimeout(async () => {
         let freshRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
-        if (!freshRoom || freshRoom.status !== 'WAITING') return;
+        if (!freshRoom || freshRoom.status !== 'WAITING') {
+          this.matchmakingRooms.delete(roomCode);
+          return;
+        }
 
         // Fill empty seats with bots before starting
         await this.roomsService.fillWithBots(roomCode);
         freshRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
-        if (!freshRoom || freshRoom.status !== 'WAITING') return;
+        if (!freshRoom || freshRoom.status !== 'WAITING') {
+          this.matchmakingRooms.delete(roomCode);
+          return;
+        }
 
         this.roomReadyMap.delete(roomCode);
+        this.matchmakingRooms.delete(roomCode);
 
         const engine = this.roomManager.create(roomCode, freshRoom.mode as any, freshRoom.handBias ?? 0, freshRoom.initialTokens ?? 2);
-        freshRoom.players.forEach((p: any) => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat));
+        freshRoom.players.forEach((p: any) => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: p.isBot, isAdmin: p.isAdmin, level: p.level, pds: p.pds, sessionWins: p.sessionWins }));
+
+        const bots = new Set<string>(freshRoom.players.filter((p: any) => p.isBot).map((p: any) => p.userId));
+        this.roomBots.set(roomCode, bots);
 
         await this.roomsService.markStarted(roomCode);
 
         const events = engine.startRound();
         this.dispatchEvents(roomCode, events);
+        this.scheduleBotMoveIfNeeded(roomCode, engine);
       }, STARTING_COUNTDOWN_MS);
     }, CONFIRM_TIMEOUT_MS);
   }

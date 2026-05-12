@@ -13,6 +13,11 @@ interface PlayerState {
   isConnected: boolean;
   isEliminated: boolean;
   isReady: boolean;
+  isBot?: boolean;
+  isAdmin?: boolean;
+  level?: number;
+  pds?: number;
+  sessionWins?: number;
 }
 
 interface EngineResult {
@@ -64,7 +69,7 @@ export class GameEngine {
     this.initialTokens = initialTokens;
   }
 
-  addPlayer(userId: string, username: string, avatarIndex: number, seat: number) {
+  addPlayer(userId: string, username: string, avatarIndex: number, seat: number, meta?: { isBot?: boolean; isAdmin?: boolean; level?: number; pds?: number; sessionWins?: number }) {
     this.players.push({
       userId,
       username,
@@ -75,6 +80,7 @@ export class GameEngine {
       isConnected: true,
       isEliminated: false,
       isReady: false,
+      ...meta,
     });
     this.tricksWon[userId] = 0;
   }
@@ -649,6 +655,11 @@ export class GameEngine {
       isConnected: p.isConnected,
       isEliminated: p.isEliminated,
       isReady: p.isReady,
+      isBot: p.isBot,
+      isAdmin: p.isAdmin,
+      level: p.level,
+      pds: p.pds,
+      sessionWins: p.sessionWins,
     };
   }
 

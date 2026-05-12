@@ -50,6 +50,10 @@ export interface PublicPlayerState {
   isReady: boolean;
   sessionWins?: number;
   isSpectator?: boolean;
+  isBot?: boolean;
+  isAdmin?: boolean;
+  level?: number;
+  pds?: number;
 }
 
 export interface ClientGameState {
