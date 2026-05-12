@@ -53,9 +53,10 @@ model Room {
   status     String     @default("WAITING")
   mode       String     @default("TRADITIONAL")
   maxPlayers Int        @default(4)
-  isPrivate  Boolean    @default(true)
-  handBias   Float      @default(0)
-  createdAt  DateTime   @default(now())
+  isPrivate      Boolean    @default(true)
+  handBias       Float      @default(0)
+  initialTokens  Int        @default(2)
+  createdAt      DateTime   @default(now())
   startedAt  DateTime?
   endedAt    DateTime?
 

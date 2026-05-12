@@ -30,6 +30,7 @@ export class RoomsService {
         maxPlayers: dto.maxPlayers,
         isPrivate: dto.isPrivate ?? true,
         handBias: dto.handBias ?? 0,
+        initialTokens: dto.initialTokens ?? 2,
         status: 'WAITING',
         players: {
           create: { userId: hostId, seat: 0, status: 'CONNECTED' },
@@ -159,7 +160,9 @@ export class RoomsService {
       data: { roomId: room.id, userId: bot.id, seat, status: 'CONNECTED' },
     });
 
-    return this.findByCode(code);
+    const updated = await this.findByCode(code);
+    this.events.emit('rooms.lobby.changed', { roomCode: code, room: updated });
+    return updated;
   }
 
   async removeBot(code: string, hostUserId: string, botUserId: string) {
@@ -173,7 +176,9 @@ export class RoomsService {
     await this.prisma.roomPlayer.deleteMany({ where: { roomId: room.id, userId: botUserId } });
     await this.prisma.user.delete({ where: { id: botUserId } });
 
-    return this.findByCode(code);
+    const updated = await this.findByCode(code);
+    this.events.emit('rooms.lobby.changed', { roomCode: code, room: updated });
+    return updated;
   }
 
   async markStarted(code: string) {
@@ -234,6 +239,7 @@ export class RoomsService {
       maxPlayers: room.maxPlayers,
       isPrivate: room.isPrivate,
       handBias: room.handBias ?? 0,
+      initialTokens: room.initialTokens ?? 2,
       players: room.players.map((rp: any) => ({
         userId: rp.userId,
         username: rp.user?.username ?? 'Unknown',

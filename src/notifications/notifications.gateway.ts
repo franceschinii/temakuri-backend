@@ -184,7 +184,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     setTimeout(async () => {
       this.roomReadyMap.delete(data.roomCode);
 
-      const engine = this.roomManager.create(data.roomCode, room.mode as any, room.handBias ?? 0);
+      const engine = this.roomManager.create(data.roomCode, room.mode as any, room.handBias ?? 0, room.initialTokens ?? 2);
       room.players.forEach(p => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat));
 
       const bots = new Set<string>(room.players.filter(p => p.isBot).map(p => p.userId));
@@ -419,6 +419,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         }
       }
     }, 900);
+  }
+
+  @OnEvent('rooms.lobby.changed')
+  broadcastLobbyRoomChanged({ roomCode, room }: { roomCode: string; room: unknown }) {
+    this.broadcastToRoom(roomCode, 'lobby:room_updated', { room });
   }
 
   @OnEvent('rooms.public.changed')

@@ -23,4 +23,11 @@ export class CreateRoomDto {
   @Max(1)
   @IsOptional()
   handBias?: number;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 3, description: 'Initial tokens (lives) per player' })
+  @IsInt()
+  @Min(1)
+  @Max(3)
+  @IsOptional()
+  initialTokens?: number;
 }

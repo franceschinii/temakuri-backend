@@ -55,10 +55,13 @@ export class GameEngine {
   private duelPlates: Map<string, Card[]> = new Map();
   private pendingDuelPick: string | null = null; // userId aguardando escolha de Prato do Dia
 
-  constructor(roomCode: string, mode: GameMode, handBias = 0) {
+  private initialTokens: number;
+
+  constructor(roomCode: string, mode: GameMode, handBias = 0, initialTokens = INITIAL_TOKENS) {
     this.roomCode = roomCode;
     this.mode = mode;
     this.handBias = handBias;
+    this.initialTokens = initialTokens;
   }
 
   addPlayer(userId: string, username: string, avatarIndex: number, seat: number) {
@@ -68,7 +71,7 @@ export class GameEngine {
       avatarIndex,
       seat,
       hand: [],
-      tokensLeft: INITIAL_TOKENS,
+      tokensLeft: this.initialTokens,
       isConnected: true,
       isEliminated: false,
       isReady: false,
@@ -241,6 +244,10 @@ export class GameEngine {
 
     const activePlayers = this.activePlayers();
     if (this.consecutivePasses >= activePlayers.length - 1) {
+      if (this.pile.length === 0) {
+        // Todos passaram sem ninguém jogar nada — jogador com mais cartas na mão perde
+        return { success: true, events: [...events, ...this.resolveStalemate(activePlayers)] };
+      }
       const wipeWinner = this.lastPlayerId ?? userId;
       return { success: true, events: [...events, ...this.resolveWipe(wipeWinner)] };
     }
@@ -331,6 +338,9 @@ export class GameEngine {
 
     const activePlayers = this.activePlayers();
     if (this.consecutivePasses >= activePlayers.length - 1) {
+      if (this.pile.length === 0) {
+        return { success: true, events: [...events, ...this.resolveStalemate(activePlayers)] };
+      }
       const wipeWinner = this.lastPlayerId ?? userId;
       return { success: true, events: [...events, ...this.resolveWipe(wipeWinner)] };
     }
@@ -338,6 +348,17 @@ export class GameEngine {
     this.advanceTurn();
     events.push({ type: 'game:turn_started', payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS } });
     return { success: true, events };
+  }
+
+  private resolveStalemate(activePlayers: PlayerState[]): EngineEvent[] {
+    // Todos passaram sem ninguém jogar — quem tem mais cartas na mão perde.
+    // Em empate, perde quem tem o maior seat (critério determinístico).
+    const loser = activePlayers.reduce((worst, p) => {
+      if (p.hand.length > worst.hand.length) return p;
+      if (p.hand.length === worst.hand.length && p.seat > worst.seat) return p;
+      return worst;
+    });
+    return this.resolveRoundEnd(loser.userId);
   }
 
   private resolveDuelLoss(loserId: string): EngineEvent[] {
@@ -395,6 +416,9 @@ export class GameEngine {
 
     const activePlayers = this.activePlayers();
     if (this.consecutivePasses >= activePlayers.length - 1) {
+      if (this.pile.length === 0) {
+        return { success: true, events: [...events, ...this.resolveStalemate(activePlayers)] };
+      }
       const wipeWinner = this.lastPlayerId ?? userId;
       return { success: true, events: [...events, ...this.resolveWipe(wipeWinner)] };
     }
@@ -520,7 +544,7 @@ export class GameEngine {
     this.phase = 'PLAYER_TURN';
 
     // Broadcast result to all players so discard pile stays in sync
-    events.push({ type: 'game:trick_pick_result', payload: { userId, action, discardedCards: action === 'discard' ? resolvedCards : [] } });
+    events.push({ type: 'game:trick_pick_result', payload: { userId, action, discardedCards: action === 'discard' ? resolvedCards : [], takenCount: action === 'take' ? resolvedCards.length : 0 } });
     events.push({ type: 'game:turn_started', payload: { userId, timeoutMs: TURN_TIMEOUT_MS } });
     return { success: true, events };
   }
