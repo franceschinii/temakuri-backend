@@ -50,4 +50,12 @@ export class RoomsController {
   ) {
     return this.roomsService.removeBot(code, userId, botId);
   }
+
+  @Post(':code/reset')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Reset room to WAITING state for a new game (host only)' })
+  resetRoom(@Param('code') code: string) {
+    return this.roomsService.resetRoom(code);
+  }
 }

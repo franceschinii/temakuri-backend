@@ -68,12 +68,13 @@ model Room {
 }
 
 model RoomPlayer {
-  id       String   @id @default(cuid())
-  roomId   String
-  userId   String
-  seat     Int
-  status   String   @default("CONNECTED")
-  joinedAt DateTime @default(now())
+  id          String   @id @default(cuid())
+  roomId      String
+  userId      String
+  seat        Int
+  status      String   @default("CONNECTED")
+  sessionWins Int      @default(0)
+  joinedAt    DateTime @default(now())
 
   room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

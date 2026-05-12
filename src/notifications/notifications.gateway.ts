@@ -123,9 +123,37 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       this.roomSockets.get(data.roomCode)!.add(client);
 
       this.broadcastToRoom(data.roomCode, 'lobby:room_updated', { room });
+
+      // Notifica espectador se entrou em partida em andamento
+      const isSpectator = room.players.find((p: any) => p.userId === client.userId)?.isSpectator === true;
+      if (isSpectator) {
+        this.sendToUser(client.userId, 'game:spectator_mode', { roomCode: data.roomCode });
+      }
     } catch (e: any) {
       this.sendToClient(client, 'lobby:error', { code: 'ROOM_NOT_FOUND', message: e.message });
     }
+  }
+
+  @SubscribeMessage('lobby:reset_room')
+  async handleResetRoom(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string }) {
+    if (!client.userId) return;
+
+    const room = await this.roomsService.findByCode(data.roomCode).catch(() => null);
+    if (!room || room.hostId !== client.userId) return;
+
+    // Destruir engine se existir
+    this.roomManager.destroy(data.roomCode);
+
+    // Limpar timer de turno
+    const timer = this.turnTimers.get(data.roomCode);
+    if (timer) { clearTimeout(timer); this.turnTimers.delete(data.roomCode); }
+
+    // Limpar estado de ready e bots
+    this.roomReadyMap.delete(data.roomCode);
+    this.roomBots.delete(data.roomCode);
+
+    const updatedRoom = await this.roomsService.resetRoom(data.roomCode);
+    this.broadcastToRoom(data.roomCode, 'lobby:room_updated', { room: updatedRoom });
   }
 
   @SubscribeMessage('lobby:leave_room')
@@ -212,6 +240,14 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return;
 
+    // Espectador: registra presença mas não altera estado do engine
+    if (!engine.hasPlayer(client.userId)) {
+      const state = engine.getClientStateFor(client.userId);
+      state.myHand = [];
+      this.sendToClient(client, 'game:state_sync', { state });
+      return;
+    }
+
     const events = engine.setPlayerConnected(client.userId, true);
     this.dispatchEvents(data.roomCode, events);
 
@@ -242,7 +278,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
           userId: r.userId,
           placement: r.placement,
           tokensLeft: r.tokensLeft,
-        })));
+        }))).then(async () => {
+          const updatedRoom = await this.roomsService.findByCode(data.roomCode).catch(() => null);
+          if (updatedRoom) {
+            this.broadcastToRoom(data.roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom });
+          }
+        }).catch(() => {});
         setTimeout(() => this.roomManager.destroy(data.roomCode), 60_000);
       }
     }
@@ -414,7 +455,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
               userId: r.userId,
               placement: r.placement,
               tokensLeft: r.tokensLeft,
-            })));
+            }))).then(async () => {
+              const updatedRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
+              if (updatedRoom) {
+                this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom });
+              }
+            }).catch(() => {});
             setTimeout(() => this.roomManager.destroy(roomCode), 60_000);
           }
         } else {
@@ -491,7 +537,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         if (engine.isGameOver()) {
           const rankings = result.events.find(e => e.type === 'game:game_over')?.payload?.['rankings'] as any[];
           if (rankings) {
-            this.roomsService.markFinished(roomCode, rankings.map(r => ({ userId: r.userId, placement: r.placement, tokensLeft: r.tokensLeft })));
+            this.roomsService.markFinished(roomCode, rankings.map(r => ({ userId: r.userId, placement: r.placement, tokensLeft: r.tokensLeft }))).then(async () => {
+              const updatedRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
+              if (updatedRoom) {
+                this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom });
+              }
+            }).catch(() => {});
             setTimeout(() => this.roomManager.destroy(roomCode), 60_000);
           }
         }

@@ -72,11 +72,25 @@ export class RoomsService {
       include: { players: true },
     });
     if (!room) throw new NotFoundException('Room not found');
-    if (room.status !== 'WAITING') throw new BadRequestException('Room already started');
-    if (room.players.length >= room.maxPlayers) throw new BadRequestException('Room is full');
 
     const existing = room.players.find(p => p.userId === userId);
     if (existing) return this.findByCode(code);
+
+    if (room.status === 'IN_PROGRESS') {
+      // Entra como espectador — aguarda próxima rodada (reset da sala)
+      const activePlayers = room.players.filter(rp => rp.status !== 'SPECTATOR');
+      if (activePlayers.length >= room.maxPlayers) throw new BadRequestException('Sala cheia');
+      const usedSeats = new Set(room.players.map(p => p.seat));
+      let seat = 0;
+      while (usedSeats.has(seat)) seat++;
+      await this.prisma.roomPlayer.create({
+        data: { roomId: room.id, userId, seat, status: 'SPECTATOR' },
+      });
+      return this.findByCode(code);
+    }
+
+    if (room.status !== 'WAITING') throw new BadRequestException('Room already started');
+    if (room.players.length >= room.maxPlayers) throw new BadRequestException('Room is full');
 
     const usedSeats = new Set(room.players.map(p => p.seat));
     let seat = 0;
@@ -224,12 +238,56 @@ export class RoomsService {
       });
     }
 
+    // Incrementa sessionWins do vencedor antes de deletar efêmeros
+    const winner = results.find(r => r.placement === 1);
+    if (winner && !ephemeralIds.has(winner.userId)) {
+      await this.prisma.roomPlayer.updateMany({
+        where: { roomId: room.id, userId: winner.userId },
+        data: { sessionWins: { increment: 1 } },
+      }).catch(() => {});
+    }
+
     // Delete ephemeral users — frees usernames immediately after game ends
     if (ephemeralIds.size > 0) {
       await this.deleteEphemeralUsers([...ephemeralIds]);
     }
 
     this.events.emit('rooms.public.changed');
+  }
+
+  async resetRoom(code: string) {
+    const room = await this.prisma.room.findUnique({
+      where: { code },
+      include: { players: { include: { user: { select: { id: true, isBot: true } } } } },
+    });
+    if (!room) throw new NotFoundException('Room not found');
+
+    // Identificar e remover bots
+    const botUserIds = room.players
+      .filter(rp => rp.user?.isBot)
+      .map(rp => rp.userId);
+
+    if (botUserIds.length > 0) {
+      await this.prisma.roomPlayer.deleteMany({
+        where: { roomId: room.id, userId: { in: botUserIds } },
+      });
+      await this.deleteEphemeralUsers(botUserIds);
+    }
+
+    // Converter espectadores em jogadores ativos
+    await this.prisma.roomPlayer.updateMany({
+      where: { roomId: room.id, status: 'SPECTATOR' },
+      data: { status: 'CONNECTED' },
+    });
+
+    const updated = await this.prisma.room.update({
+      where: { code },
+      data: { status: 'WAITING', startedAt: null, endedAt: null },
+      include: { players: { include: { user: true } } },
+    });
+
+    if (!updated.isPrivate) this.events.emit('rooms.public.changed');
+    return this.formatRoom(updated);
   }
 
   async deleteGuestIfOrphan(userId: string) {
@@ -243,7 +301,7 @@ export class RoomsService {
     await this.deleteEphemeralUsers([userId]);
   }
 
-  private async deleteEphemeralUsers(ids: string[]) {
+  protected async deleteEphemeralUsers(ids: string[]) {
     if (ids.length === 0) return;
     await this.prisma.gameResult.deleteMany({ where: { userId: { in: ids } } });
     await this.prisma.userStats.deleteMany({ where: { userId: { in: ids } } });
@@ -269,6 +327,8 @@ export class RoomsService {
         isReady: false,
         isConnected: rp.status === 'CONNECTED',
         isBot: rp.user?.isBot ?? false,
+        isSpectator: rp.status === 'SPECTATOR',
+        sessionWins: rp.sessionWins ?? 0,
       })),
     };
   }

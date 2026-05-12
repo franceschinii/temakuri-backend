@@ -79,6 +79,10 @@ export class GameEngine {
     this.tricksWon[userId] = 0;
   }
 
+  hasPlayer(userId: string): boolean {
+    return this.players.some(p => p.userId === userId);
+  }
+
   setReady(userId: string, ready: boolean) {
     const p = this.findPlayer(userId);
     if (p) p.isReady = ready;
@@ -134,6 +138,20 @@ export class GameEngine {
         payload: { hand: p.hand },
         targetUserId: p.userId,
       });
+    });
+
+    // Broadcast public round state so all clients stay in sync (pile reset, card counts)
+    const cardCounts: Record<string, number> = {};
+    activePlayers.forEach(p => { cardCounts[p.userId] = p.hand.length; });
+    events.push({
+      type: 'game:round_started',
+      payload: {
+        round: this.round,
+        drawPileCount: this.drawPile.length,
+        cardCounts,
+        duelPlates: this.isDuel() ? this.getDuelPlates() : null,
+        market: this.market ?? null,
+      },
     });
 
     events.push({

@@ -48,6 +48,8 @@ export interface PublicPlayerState {
   isConnected: boolean;
   isEliminated: boolean;
   isReady: boolean;
+  sessionWins?: number;
+  isSpectator?: boolean;
 }
 
 export interface ClientGameState {
