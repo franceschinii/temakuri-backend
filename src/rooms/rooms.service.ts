@@ -96,21 +96,24 @@ export class RoomsService {
     await this.prisma.roomPlayer.deleteMany({ where: { roomId: room.id, userId } });
 
     if (room.hostId === userId) {
-      // Host leaving always closes the room (not transferred)
-      // Clean up any bot Users before deleting the room
-      const botIds = room.players
-        .filter(p => p.userId !== userId)
-        .map(p => p.userId);
-      if (botIds.length > 0) {
-        const bots = await this.prisma.user.findMany({
-          where: { id: { in: botIds }, isBot: true },
+      // Host leaving closes the room — clean up bots and guests from other players
+      const otherIds = room.players.filter(p => p.userId !== userId).map(p => p.userId);
+      if (otherIds.length > 0) {
+        const ephemeral = await this.prisma.user.findMany({
+          where: { id: { in: otherIds }, OR: [{ isBot: true }, { isGuest: true }] },
           select: { id: true },
         });
-        if (bots.length > 0) {
-          await this.prisma.user.deleteMany({ where: { id: { in: bots.map(b => b.id) } } });
+        if (ephemeral.length > 0) {
+          await this.deleteEphemeralUsers(ephemeral.map(u => u.id));
         }
       }
       await this.prisma.room.delete({ where: { id: room.id } });
+    } else {
+      // Non-host guest leaving — free their username immediately
+      const leaving = await this.prisma.user.findUnique({ where: { id: userId }, select: { isGuest: true } });
+      if (leaving?.isGuest) {
+        await this.deleteEphemeralUsers([userId]);
+      }
     }
 
     if (!room.isPrivate) this.events.emit('rooms.public.changed');
@@ -193,16 +196,16 @@ export class RoomsService {
     const room = await this.prisma.room.update({
       where: { code },
       data: { status: 'FINISHED', endedAt: new Date() },
-      include: { players: { include: { user: { select: { id: true, isBot: true } } } } },
+      include: { players: { include: { user: { select: { id: true, isBot: true, isGuest: true } } } } },
     });
 
-    // Identify bot users before recording results (bots get no stats)
-    const botIds = new Set(
-      room.players.filter(p => p.user?.isBot).map(p => p.userId),
+    // Ephemeral users (bots + guests) get no stats recorded
+    const ephemeralIds = new Set(
+      room.players.filter(p => p.user?.isBot || p.user?.isGuest).map(p => p.userId),
     );
 
     for (const r of results) {
-      if (botIds.has(r.userId)) continue; // skip bots for stats/results
+      if (ephemeralIds.has(r.userId)) continue;
 
       await this.prisma.gameResult.create({
         data: { roomId: room.id, userId: r.userId, placement: r.placement, tokensLeft: r.tokensLeft },
@@ -221,12 +224,30 @@ export class RoomsService {
       });
     }
 
-    // Clean up bot users — frees their usernames for future games
-    if (botIds.size > 0) {
-      await this.prisma.user.deleteMany({ where: { id: { in: [...botIds] } } });
+    // Delete ephemeral users — frees usernames immediately after game ends
+    if (ephemeralIds.size > 0) {
+      await this.deleteEphemeralUsers([...ephemeralIds]);
     }
 
     this.events.emit('rooms.public.changed');
+  }
+
+  async deleteGuestIfOrphan(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { isGuest: true },
+    });
+    if (!user?.isGuest) return;
+    const inRoom = await this.prisma.roomPlayer.findFirst({ where: { userId } });
+    if (inRoom) return;
+    await this.deleteEphemeralUsers([userId]);
+  }
+
+  private async deleteEphemeralUsers(ids: string[]) {
+    if (ids.length === 0) return;
+    await this.prisma.gameResult.deleteMany({ where: { userId: { in: ids } } });
+    await this.prisma.userStats.deleteMany({ where: { userId: { in: ids } } });
+    await this.prisma.user.deleteMany({ where: { id: { in: ids } } });
   }
 
   private formatRoom(room: any) {

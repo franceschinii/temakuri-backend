@@ -103,6 +103,9 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         const events = engine.setPlayerConnected(client.userId, false);
         this.dispatchEvents(client.roomCode, events);
       }
+    } else {
+      // Guest with no active room (closed tab before joining a room) — free username
+      this.roomsService.deleteGuestIfOrphan(client.userId).catch(() => {});
     }
   }
 

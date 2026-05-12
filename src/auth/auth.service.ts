@@ -42,6 +42,15 @@ export class AuthService {
     const valid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!valid) throw new UnauthorizedException('Invalid credentials');
 
+    if ((user as any).isBanned) {
+      throw new UnauthorizedException('Conta banida. Entre em contato com o suporte.');
+    }
+    const suspendedUntil = (user as any).suspendedUntil as Date | null;
+    if (suspendedUntil && suspendedUntil > new Date()) {
+      const until = suspendedUntil.toLocaleDateString('pt-BR');
+      throw new UnauthorizedException(`Conta suspensa até ${until}.`);
+    }
+
     const tokens = await this.generateTokens(user.id, user.username);
     await this.saveRefreshToken(user.id, tokens.refreshToken);
 

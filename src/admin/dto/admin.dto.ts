@@ -1,4 +1,4 @@
-import { IsEmail, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsDateString, IsEmail, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
 
 export class UpdateUserDto {
   @IsOptional()
@@ -19,6 +19,16 @@ export class ResetPasswordDto {
   @IsString()
   @MinLength(6)
   newPassword: string;
+}
+
+export class ModerationDto {
+  @IsOptional()
+  @IsBoolean()
+  isBanned?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  suspendedUntil?: string | null;
 }
 
 export class UpdateStatsDto {

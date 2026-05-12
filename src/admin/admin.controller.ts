@@ -1,19 +1,11 @@
 import {
-  Controller,
-  Get,
-  Patch,
-  Post,
-  Delete,
-  Param,
-  Body,
-  UseGuards,
-  HttpCode,
-  HttpStatus,
+  Controller, Get, Patch, Post, Delete,
+  Param, Body, UseGuards, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { AdminGuard } from '../auth/guards/admin.guard.js';
 import { AdminService } from './admin.service.js';
-import { UpdateUserDto, ResetPasswordDto, UpdateStatsDto } from './dto/admin.dto.js';
+import { UpdateUserDto, ResetPasswordDto, UpdateStatsDto, ModerationDto } from './dto/admin.dto.js';
 
 @UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('admin')
@@ -33,6 +25,11 @@ export class AdminController {
   @Patch('users/:id')
   updateUser(@Param('id') id: string, @Body() dto: UpdateUserDto) {
     return this.adminService.updateUser(id, dto);
+  }
+
+  @Patch('users/:id/moderation')
+  moderateUser(@Param('id') id: string, @Body() dto: ModerationDto) {
+    return this.adminService.moderateUser(id, dto);
   }
 
   @Delete('users/:id')
