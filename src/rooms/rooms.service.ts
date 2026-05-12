@@ -560,6 +560,7 @@ export class RoomsService {
         isReady: false,
         isConnected: rp.status === 'CONNECTED',
         isBot: rp.user?.isBot ?? false,
+        isGuest: rp.user?.isGuest ?? false,
         isAdmin: rp.user?.isAdmin ?? false,
         isSpectator: rp.status === 'SPECTATOR',
         sessionWins: rp.sessionWins ?? 0,

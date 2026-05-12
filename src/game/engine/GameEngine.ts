@@ -14,6 +14,7 @@ interface PlayerState {
   isEliminated: boolean;
   isReady: boolean;
   isBot?: boolean;
+  isGuest?: boolean;
   isAdmin?: boolean;
   level?: number;
   pds?: number;
@@ -656,6 +657,7 @@ export class GameEngine {
       isEliminated: p.isEliminated,
       isReady: p.isReady,
       isBot: p.isBot,
+      isGuest: p.isGuest,
       isAdmin: p.isAdmin,
       level: p.level,
       pds: p.pds,

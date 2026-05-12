@@ -51,6 +51,7 @@ export interface PublicPlayerState {
   sessionWins?: number;
   isSpectator?: boolean;
   isBot?: boolean;
+  isGuest?: boolean;
   isAdmin?: boolean;
   level?: number;
   pds?: number;

@@ -271,7 +271,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
             this.roomReadyMap.delete(data.roomCode);
             this.matchmakingRooms.delete(data.roomCode);
             const engine = this.roomManager.create(data.roomCode, filledRoom.mode as any, filledRoom.handBias ?? 0, filledRoom.initialTokens ?? 2);
-            filledRoom.players.forEach((p: any) => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: p.isBot, isAdmin: p.isAdmin, level: p.level, pds: p.pds, sessionWins: p.sessionWins }));
+            filledRoom.players.forEach((p: any) => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: p.isBot, isGuest: p.isGuest, isAdmin: p.isAdmin, level: p.level, pds: p.pds, sessionWins: p.sessionWins }));
             const bots = new Set<string>(filledRoom.players.filter((p: any) => p.isBot).map((p: any) => p.userId));
             this.roomBots.set(data.roomCode, bots);
             await this.roomsService.markStarted(data.roomCode);
@@ -312,7 +312,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       this.roomReadyMap.delete(data.roomCode);
 
       const engine = this.roomManager.create(data.roomCode, room.mode as any, room.handBias ?? 0, room.initialTokens ?? 2);
-      room.players.forEach(p => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: (p as any).isBot, isAdmin: (p as any).isAdmin, level: (p as any).level, pds: (p as any).pds, sessionWins: (p as any).sessionWins }));
+      room.players.forEach(p => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: (p as any).isBot, isGuest: (p as any).isGuest, isAdmin: (p as any).isAdmin, level: (p as any).level, pds: (p as any).pds, sessionWins: (p as any).sessionWins }));
 
       const bots = new Set<string>(room.players.filter(p => p.isBot).map(p => p.userId));
       this.roomBots.set(data.roomCode, bots);
@@ -655,7 +655,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         this.matchmakingRooms.delete(roomCode);
 
         const engine = this.roomManager.create(roomCode, freshRoom.mode as any, freshRoom.handBias ?? 0, freshRoom.initialTokens ?? 2);
-        freshRoom.players.forEach((p: any) => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: p.isBot, isAdmin: p.isAdmin, level: p.level, pds: p.pds, sessionWins: p.sessionWins }));
+        freshRoom.players.forEach((p: any) => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: p.isBot, isGuest: p.isGuest, isAdmin: p.isAdmin, level: p.level, pds: p.pds, sessionWins: p.sessionWins }));
 
         const bots = new Set<string>(freshRoom.players.filter((p: any) => p.isBot).map((p: any) => p.userId));
         this.roomBots.set(roomCode, bots);
