@@ -188,8 +188,22 @@ export class GameEngine {
     if (player.hand.length === 0) {
       events.push({ type: 'game:player_hand_empty', payload: { userId } });
 
-      // Quem esvazia a mão perde 1 prato — rodada encerra imediatamente.
-      return { success: true, events: [...events, ...this.resolveRoundEnd(userId)] };
+      // Quem esvazia a mão vence a rodada — jogador com mais cartas restantes perde.
+      // Empate resolve por maior seat (critério determinístico).
+      const active = this.activePlayers();
+      const stillHaveCards = active.filter(p => p.hand.length > 0);
+
+      if (stillHaveCards.length === 0) {
+        // Todos zeraram ao mesmo tempo — nova rodada sem perdedor.
+        return { success: true, events: [...events, ...this.startRound()] };
+      }
+
+      const loser = stillHaveCards.reduce((worst, p) => {
+        if (p.hand.length > worst.hand.length) return p;
+        if (p.hand.length === worst.hand.length && p.seat > worst.seat) return p;
+        return worst;
+      });
+      return { success: true, events: [...events, ...this.resolveRoundEnd(loser.userId)] };
     }
 
     this.advanceTurn();
