@@ -100,9 +100,10 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
       const engine = this.roomManager.get(client.roomCode);
       if (engine) {
-        // Game in progress: mark disconnected, allow reconnect
+        // Game in progress: mark disconnected, allow reconnect + apply ranked abandonment penalty
         const events = engine.setPlayerConnected(client.userId, false);
         this.dispatchEvents(client.roomCode, events);
+        this.applyRankedAbandonmentIfNeeded(client.userId, client.roomCode).catch(() => {});
       } else {
         // Room in WAITING: remove guest immediately (they only exist while connected)
         this.roomsService.leaveRoomIfGuest(client.userId, client.roomCode).then(removed => {
@@ -302,10 +303,10 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
           userId: r.userId,
           placement: r.placement,
           tokensLeft: r.tokensLeft,
-        }))).then(async () => {
+        }))).then(async (rewards) => {
           const updatedRoom = await this.roomsService.findByCode(data.roomCode).catch(() => null);
           if (updatedRoom) {
-            this.broadcastToRoom(data.roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom });
+            this.broadcastToRoom(data.roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
           }
         }).catch(() => {});
         setTimeout(() => this.roomManager.destroy(data.roomCode), 60_000);
@@ -479,10 +480,10 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
               userId: r.userId,
               placement: r.placement,
               tokensLeft: r.tokensLeft,
-            }))).then(async () => {
+            }))).then(async (rewards) => {
               const updatedRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
               if (updatedRoom) {
-                this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom });
+                this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
               }
             }).catch(() => {});
             setTimeout(() => this.roomManager.destroy(roomCode), 60_000);
@@ -492,6 +493,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         }
       }
     }, 900);
+  }
+
+  private async applyRankedAbandonmentIfNeeded(userId: string, roomCode: string) {
+    const room = await this.roomsService.findByCode(roomCode).catch(() => null);
+    if (!room?.isRanked) return;
+    await this.roomsService.applyRankedAbandonment(userId);
   }
 
   @OnEvent('rooms.lobby.changed')
@@ -561,10 +568,10 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         if (engine.isGameOver()) {
           const rankings = result.events.find(e => e.type === 'game:game_over')?.payload?.['rankings'] as any[];
           if (rankings) {
-            this.roomsService.markFinished(roomCode, rankings.map(r => ({ userId: r.userId, placement: r.placement, tokensLeft: r.tokensLeft }))).then(async () => {
+            this.roomsService.markFinished(roomCode, rankings.map(r => ({ userId: r.userId, placement: r.placement, tokensLeft: r.tokensLeft }))).then(async (rewards) => {
               const updatedRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
               if (updatedRoom) {
-                this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom });
+                this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
               }
             }).catch(() => {});
             setTimeout(() => this.roomManager.destroy(roomCode), 60_000);

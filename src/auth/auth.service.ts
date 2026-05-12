@@ -28,6 +28,9 @@ export class AuthService {
     });
 
     await this.prisma.userStats.create({ data: { userId: user.id } });
+    await this.prisma.userInventory.create({
+      data: { userId: user.id, unlockedAvatars: [0, 1, 2, 3], unlockedModes: ['TRADITIONAL'] },
+    });
 
     const tokens = await this.generateTokens(user.id, user.username);
     await this.saveRefreshToken(user.id, tokens.refreshToken);
@@ -192,6 +195,16 @@ export class AuthService {
 
   private sanitizeUser(user: any) {
     const { passwordHash, ...rest } = user;
-    return rest;
+    return {
+      ...rest,
+      xp: rest.xp ?? 0,
+      level: rest.level ?? 1,
+      coins: rest.coins ?? 0,
+      pds: rest.pds ?? 0,
+      winStreak: rest.winStreak ?? 0,
+      lossStreak: rest.lossStreak ?? 0,
+      rankedWarnings: rest.rankedWarnings ?? 0,
+      rankedSuspendedUntil: rest.rankedSuspendedUntil ?? null,
+    };
   }
 }

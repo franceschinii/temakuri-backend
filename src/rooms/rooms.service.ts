@@ -1,8 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateRoomDto } from './dto/room.dto.js';
 import { customAlphabet } from 'nanoid';
+import { xpGain, coinsGain, computeLevel } from '../common/xp.utils.js';
+import { calcPdsChange, clampPds, rankFromPds } from '../common/pds.utils.js';
 
 const generateCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
 
@@ -14,6 +16,28 @@ export class RoomsService {
   ) {}
 
   async create(hostId: string, dto: CreateRoomDto) {
+    if (dto.isRanked) {
+      if (dto.mode !== 'TRADITIONAL') {
+        throw new BadRequestException('Ranked só está disponível no modo Tradicional');
+      }
+      const host = await this.prisma.user.findUnique({ where: { id: hostId } });
+      if (!host || (host.level ?? 1) < 10) {
+        throw new ForbiddenException('Ranqueada requer nível 10 ou superior');
+      }
+      if (host.rankedSuspendedUntil && host.rankedSuspendedUntil > new Date()) {
+        const until = host.rankedSuspendedUntil.toLocaleDateString('pt-BR');
+        throw new ForbiddenException(`Você está suspenso da ranqueada até ${until}`);
+      }
+    }
+
+    // Gate de modo: verificar se o host tem o modo desbloqueado
+    if (dto.mode !== 'TRADITIONAL') {
+      const inv = await this.prisma.userInventory.findUnique({ where: { userId: hostId } });
+      if (!inv || !inv.unlockedModes.includes(dto.mode)) {
+        throw new ForbiddenException(`Modo ${dto.mode} não desbloqueado. Adquira na loja.`);
+      }
+    }
+
     let code: string;
     let attempts = 0;
     do {
@@ -29,6 +53,7 @@ export class RoomsService {
         mode: dto.mode,
         maxPlayers: dto.maxPlayers,
         isPrivate: dto.isPrivate ?? true,
+        isRanked: dto.isRanked ?? false,
         handBias: dto.handBias ?? 0,
         initialTokens: dto.initialTokens ?? 2,
         status: 'WAITING',
@@ -47,7 +72,8 @@ export class RoomsService {
     const rooms = await this.prisma.room.findMany({
       where: {
         isPrivate: false,
-        status: status ?? 'WAITING',
+        // Mostrar salas WAITING e IN_PROGRESS — lobby exibe ambas, distinguindo visualmente
+        status: status ? status : { in: ['WAITING', 'IN_PROGRESS'] },
         ...(mode ? { mode } : {}),
       },
       include: { players: { include: { user: true } } },
@@ -73,8 +99,17 @@ export class RoomsService {
     });
     if (!room) throw new NotFoundException('Room not found');
 
+    // Gate de modo para não-TRADITIONAL (apenas para novos membros, não para reconexão)
     const existing = room.players.find(p => p.userId === userId);
-    if (existing) return this.findByCode(code);
+    if (!existing && room.mode !== 'TRADITIONAL') {
+      const inv = await this.prisma.userInventory.findUnique({ where: { userId } });
+      if (!inv || !inv.unlockedModes.includes(room.mode)) {
+        throw new ForbiddenException(`Modo ${room.mode} não desbloqueado. Adquira na loja.`);
+      }
+    }
+
+    const alreadyIn = room.players.find(p => p.userId === userId);
+    if (alreadyIn) return this.findByCode(code);
 
     if (room.status === 'IN_PROGRESS') {
       // Entra como espectador — aguarda próxima rodada (reset da sala)
@@ -214,24 +249,41 @@ export class RoomsService {
     this.events.emit('rooms.public.changed');
   }
 
-  async markFinished(code: string, results: { userId: string; placement: number; tokensLeft: number }[]) {
+  async markFinished(
+    code: string,
+    results: { userId: string; placement: number; tokensLeft: number }[],
+  ): Promise<Record<string, { xpEarned: number; coinsEarned: number; newLevel: number; leveledUp: boolean; pdsChange: number; newPds: number; newRank: string }>> {
     const room = await this.prisma.room.update({
       where: { code },
       data: { status: 'FINISHED', endedAt: new Date() },
       include: { players: { include: { user: { select: { id: true, isBot: true, isGuest: true } } } } },
     });
 
-    // Ephemeral users (bots + guests) get no stats recorded
     const ephemeralIds = new Set(
       room.players.filter(p => p.user?.isBot || p.user?.isGuest).map(p => p.userId),
     );
 
+    const totalPlayers = results.length;
+    const rewards: Record<string, { xpEarned: number; coinsEarned: number; newLevel: number; leveledUp: boolean; pdsChange: number; newPds: number; newRank: string }> = {};
+
     for (const r of results) {
       if (ephemeralIds.has(r.userId)) continue;
 
+      const earned = xpGain(r.placement, totalPlayers);
+      const coins = coinsGain(r.placement, totalPlayers);
+
       await this.prisma.gameResult.create({
-        data: { roomId: room.id, userId: r.userId, placement: r.placement, tokensLeft: r.tokensLeft },
+        data: {
+          roomId: room.id,
+          userId: r.userId,
+          placement: r.placement,
+          tokensLeft: r.tokensLeft,
+          xpEarned: earned,
+          coinsEarned: coins,
+          isRanked: room.isRanked,
+        },
       });
+
       await this.prisma.userStats.upsert({
         where: { userId: r.userId },
         create: {
@@ -244,6 +296,68 @@ export class RoomsService {
           gamesWon: { increment: r.placement === 1 ? 1 : 0 },
         },
       });
+
+      const user = await this.prisma.user.findUnique({
+        where: { id: r.userId },
+        select: { xp: true, level: true, pds: true, winStreak: true, lossStreak: true },
+      });
+      if (!user) continue;
+
+      const newXp = (user.xp ?? 0) + earned;
+      const oldLevel = user.level ?? 1;
+      const newLevel = Math.min(computeLevel(newXp), 100);
+
+      let pdsDelta = 0;
+      let newPds = user.pds ?? 0;
+      let newWinStreak = user.winStreak ?? 0;
+      let newLossStreak = user.lossStreak ?? 0;
+
+      if (room.isRanked) {
+        const isWinner = r.placement === 1;
+        if (isWinner) {
+          newWinStreak = (user.winStreak ?? 0) + 1;
+          newLossStreak = 0;
+        } else {
+          newLossStreak = (user.lossStreak ?? 0) + 1;
+          newWinStreak = 0;
+        }
+        pdsDelta = calcPdsChange(r.placement, totalPlayers, user.winStreak ?? 0, user.lossStreak ?? 0);
+        newPds = clampPds((user.pds ?? 0) + pdsDelta, user.pds ?? 0);
+
+        await this.prisma.rankedStats.upsert({
+          where: { userId: r.userId },
+          create: {
+            userId: r.userId,
+            rankedWins: isWinner ? 1 : 0,
+            rankedLosses: isWinner ? 0 : 1,
+            peakPds: newPds,
+          },
+          update: {
+            ...(isWinner ? { rankedWins: { increment: 1 } } : { rankedLosses: { increment: 1 } }),
+            ...(newPds > (user.pds ?? 0) ? { peakPds: newPds } : {}),
+          },
+        });
+      }
+
+      await this.prisma.user.update({
+        where: { id: r.userId },
+        data: {
+          xp: newXp,
+          level: newLevel,
+          coins: { increment: coins },
+          ...(room.isRanked ? { pds: newPds, winStreak: newWinStreak, lossStreak: newLossStreak } : {}),
+        },
+      });
+
+      rewards[r.userId] = {
+        xpEarned: earned,
+        coinsEarned: coins,
+        newLevel,
+        leveledUp: newLevel > oldLevel,
+        pdsChange: pdsDelta,
+        newPds,
+        newRank: rankFromPds(newPds),
+      };
     }
 
     // Incrementa sessionWins do vencedor antes de deletar efêmeros
@@ -255,12 +369,12 @@ export class RoomsService {
       }).catch(() => {});
     }
 
-    // Delete ephemeral users — frees usernames immediately after game ends
     if (ephemeralIds.size > 0) {
       await this.deleteEphemeralUsers([...ephemeralIds]);
     }
 
     this.events.emit('rooms.public.changed');
+    return rewards;
   }
 
   async resetRoom(code: string) {
@@ -296,6 +410,35 @@ export class RoomsService {
 
     if (!updated.isPrivate) this.events.emit('rooms.public.changed');
     return this.formatRoom(updated);
+  }
+
+  async applyRankedAbandonment(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { pds: true, winStreak: true, lossStreak: true, rankedWarnings: true },
+    });
+    if (!user) return;
+
+    const newPds = clampPds((user.pds ?? 0) - 40, user.pds ?? 0);
+    const newWarnings = (user.rankedWarnings ?? 0) + 1;
+
+    let rankedSuspendedUntil: Date | null = null;
+    if (newWarnings >= 5) {
+      rankedSuspendedUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    } else if (newWarnings >= 3) {
+      rankedSuspendedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        pds: newPds,
+        rankedWarnings: newWarnings,
+        ...(rankedSuspendedUntil !== null ? { rankedSuspendedUntil } : {}),
+        lossStreak: { increment: 1 },
+        winStreak: 0,
+      },
+    });
   }
 
   async leaveRoomIfGuest(userId: string, code: string): Promise<boolean> {
@@ -350,12 +493,15 @@ export class RoomsService {
       mode: room.mode,
       maxPlayers: room.maxPlayers,
       isPrivate: room.isPrivate,
+      isRanked: room.isRanked ?? false,
       handBias: room.handBias ?? 0,
       initialTokens: room.initialTokens ?? 2,
       players: room.players.map((rp: any) => ({
         userId: rp.userId,
         username: rp.user?.username ?? 'Unknown',
         avatarIndex: rp.user?.avatarIndex ?? 0,
+        level: rp.user?.level ?? 1,
+        pds: rp.user?.pds ?? 0,
         seat: rp.seat,
         isReady: false,
         isConnected: rp.status === 'CONNECTED',

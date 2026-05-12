@@ -30,4 +30,9 @@ export class CreateRoomDto {
   @Max(3)
   @IsOptional()
   initialTokens?: number;
+
+  @ApiPropertyOptional()
+  @IsBoolean()
+  @IsOptional()
+  isRanked?: boolean;
 }

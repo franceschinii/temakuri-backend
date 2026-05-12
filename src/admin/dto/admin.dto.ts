@@ -1,4 +1,4 @@
-import { IsBoolean, IsDateString, IsEmail, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsEmail, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 
 export class UpdateUserDto {
   @IsOptional()
@@ -51,4 +51,56 @@ export class UpdateStatsDto {
   @IsInt()
   @Min(0)
   tricksWon?: number;
+}
+
+export class UpdateProgressionDto {
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  xp?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  level?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  coins?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  pds?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  rankedWarnings?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  clearRankedSuspension?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  grantAvatars?: number[];
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  revokeAvatars?: number[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  grantModes?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  revokeModes?: string[];
 }

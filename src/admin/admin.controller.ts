@@ -5,7 +5,7 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { AdminGuard } from '../auth/guards/admin.guard.js';
 import { AdminService } from './admin.service.js';
-import { UpdateUserDto, ResetPasswordDto, UpdateStatsDto, ModerationDto } from './dto/admin.dto.js';
+import { UpdateUserDto, ResetPasswordDto, UpdateStatsDto, ModerationDto, UpdateProgressionDto } from './dto/admin.dto.js';
 
 @UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('admin')
@@ -64,5 +64,10 @@ export class AdminController {
   @Patch('users/:id/stats')
   updateUserStats(@Param('id') id: string, @Body() dto: UpdateStatsDto) {
     return this.adminService.updateUserStats(id, dto);
+  }
+
+  @Patch('users/:id/progression')
+  updateUserProgression(@Param('id') id: string, @Body() dto: UpdateProgressionDto) {
+    return this.adminService.updateUserProgression(id, dto);
   }
 }

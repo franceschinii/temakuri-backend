@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RoomsService } from '../rooms/rooms.service.js';
-import { UpdateUserDto, ResetPasswordDto, UpdateStatsDto, ModerationDto } from './dto/admin.dto.js';
+import { UpdateUserDto, ResetPasswordDto, UpdateStatsDto, ModerationDto, UpdateProgressionDto } from './dto/admin.dto.js';
 
 const USER_SELECT = {
   id: true,
@@ -14,6 +14,12 @@ const USER_SELECT = {
   isBanned: true,
   suspendedUntil: true,
   avatarIndex: true,
+  xp: true,
+  level: true,
+  coins: true,
+  pds: true,
+  rankedWarnings: true,
+  rankedSuspendedUntil: true,
   createdAt: true,
   stats: {
     select: {
@@ -21,6 +27,12 @@ const USER_SELECT = {
       gamesWon: true,
       saborTriggers: true,
       tricksWon: true,
+    },
+  },
+  inventory: {
+    select: {
+      unlockedAvatars: true,
+      unlockedModes: true,
     },
   },
 } as const;
@@ -158,5 +170,51 @@ export class AdminService {
         ...(dto.tricksWon !== undefined && { tricksWon: dto.tricksWon }),
       },
     });
+  }
+
+  async updateUserProgression(id: string, dto: UpdateProgressionDto) {
+    await this.findUser(id);
+
+    // Update user fields
+    const userUpdate: Record<string, unknown> = {};
+    if (dto.xp !== undefined) userUpdate.xp = dto.xp;
+    if (dto.level !== undefined) userUpdate.level = dto.level;
+    if (dto.coins !== undefined) userUpdate.coins = dto.coins;
+    if (dto.pds !== undefined) userUpdate.pds = dto.pds;
+    if (dto.rankedWarnings !== undefined) userUpdate.rankedWarnings = dto.rankedWarnings;
+    if (dto.clearRankedSuspension) userUpdate.rankedSuspendedUntil = null;
+
+    if (Object.keys(userUpdate).length > 0) {
+      await this.prisma.user.update({ where: { id }, data: userUpdate });
+    }
+
+    // Update inventory (avatars and modes)
+    if (dto.grantAvatars?.length || dto.revokeAvatars?.length || dto.grantModes?.length || dto.revokeModes?.length) {
+      let inv = await this.prisma.userInventory.findUnique({ where: { userId: id } });
+      if (!inv) {
+        inv = await this.prisma.userInventory.create({
+          data: { userId: id, unlockedAvatars: [0, 1, 2, 3], unlockedModes: ['TRADITIONAL'] },
+        });
+      }
+
+      let avatars = [...inv.unlockedAvatars];
+      let modes = [...inv.unlockedModes];
+
+      if (dto.grantAvatars) avatars = [...new Set([...avatars, ...dto.grantAvatars])];
+      if (dto.revokeAvatars) avatars = avatars.filter(a => !dto.revokeAvatars!.includes(a));
+      if (dto.grantModes) modes = [...new Set([...modes, ...dto.grantModes])];
+      if (dto.revokeModes) modes = modes.filter(m => !dto.revokeModes!.includes(m));
+
+      // Always keep avatar 0-3 and TRADITIONAL
+      if (!avatars.includes(0)) avatars.unshift(0);
+      if (!modes.includes('TRADITIONAL')) modes.unshift('TRADITIONAL');
+
+      await this.prisma.userInventory.update({
+        where: { userId: id },
+        data: { unlockedAvatars: avatars, unlockedModes: modes },
+      });
+    }
+
+    return this.findUser(id);
   }
 }
