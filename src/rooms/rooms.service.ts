@@ -204,9 +204,21 @@ export class RoomsService {
         await this.deleteEphemeralUsers([userId]);
       }
 
-      // If no players remain after this person leaves, close the room
+      // If no human players remain after this person leaves, clean up bots and close the room
       const remaining = room.players.filter(p => p.userId !== userId);
       if (remaining.length === 0) {
+        await this.prisma.room.delete({ where: { id: room.id } });
+        if (!room.isPrivate) this.events.emit('rooms.public.changed');
+        return;
+      }
+
+      const remainingIds = remaining.map(p => p.userId);
+      const remainingBots = await this.prisma.user.findMany({
+        where: { id: { in: remainingIds }, isBot: true },
+        select: { id: true },
+      });
+      if (remainingBots.length === remaining.length) {
+        await this.deleteEphemeralUsers(remainingBots.map(b => b.id));
         await this.prisma.room.delete({ where: { id: room.id } });
         if (!room.isPrivate) this.events.emit('rooms.public.changed');
         return;
