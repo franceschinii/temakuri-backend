@@ -1,6 +1,6 @@
 import {
   Controller, Get, Patch, Post, Delete,
-  Param, Body, UseGuards, HttpCode, HttpStatus,
+  Param, Body, UseGuards, HttpCode, HttpStatus, Query,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { AdminGuard } from '../auth/guards/admin.guard.js';
@@ -11,6 +11,23 @@ import { UpdateUserDto, ResetPasswordDto, UpdateStatsDto, ModerationDto } from '
 @Controller('admin')
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
+
+  @Get('rooms')
+  findAllRooms() {
+    return this.adminService.findAllRooms();
+  }
+
+  @Delete('rooms/:code')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  deleteRoom(@Param('code') code: string) {
+    return this.adminService.adminDeleteRoom(code);
+  }
+
+  @Delete('rooms/:code/players/:userId')
+  @HttpCode(HttpStatus.OK)
+  kickPlayer(@Param('code') code: string, @Param('userId') userId: string) {
+    return this.adminService.adminKickPlayer(code, userId);
+  }
 
   @Get('users')
   findAllUsers() {

@@ -298,6 +298,31 @@ export class RoomsService {
     return this.formatRoom(updated);
   }
 
+  async leaveRoomIfGuest(userId: string, code: string): Promise<boolean> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { isGuest: true, isBot: true },
+    });
+    if (!user?.isGuest && !user?.isBot) return false;
+
+    const room = await this.prisma.room.findUnique({
+      where: { code },
+      include: { players: true },
+    });
+    if (!room || room.status === 'IN_PROGRESS') return false;
+
+    await this.prisma.roomPlayer.deleteMany({ where: { roomId: room.id, userId } });
+    await this.deleteEphemeralUsers([userId]);
+
+    const remaining = room.players.filter(p => p.userId !== userId);
+    if (remaining.length === 0) {
+      await this.prisma.room.delete({ where: { id: room.id } });
+    }
+
+    if (!room.isPrivate) this.events.emit('rooms.public.changed');
+    return true;
+  }
+
   async deleteGuestIfOrphan(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },

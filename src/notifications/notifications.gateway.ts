@@ -100,8 +100,18 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
       const engine = this.roomManager.get(client.roomCode);
       if (engine) {
+        // Game in progress: mark disconnected, allow reconnect
         const events = engine.setPlayerConnected(client.userId, false);
         this.dispatchEvents(client.roomCode, events);
+      } else {
+        // Room in WAITING: remove guest immediately (they only exist while connected)
+        this.roomsService.leaveRoomIfGuest(client.userId, client.roomCode).then(removed => {
+          if (removed) {
+            this.roomsService.findByCode(client.roomCode!).then(room => {
+              this.broadcastToRoom(client.roomCode!, 'lobby:room_updated', { room });
+            }).catch(() => {});
+          }
+        }).catch(() => {});
       }
     } else {
       // Guest with no active room (closed tab before joining a room) — free username
@@ -112,6 +122,20 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   @SubscribeMessage('lobby:join_room')
   async handleJoinRoom(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string }) {
     if (!client.userId) throw new WsException('Unauthorized');
+
+    // Bloquear se o userId já está em outra sala com qualquer outro socket
+    const existingSockets = this.userSockets.get(client.userId);
+    if (existingSockets) {
+      for (const sock of existingSockets) {
+        if (sock !== client && sock.roomCode && sock.roomCode !== data.roomCode) {
+          this.sendToClient(client, 'lobby:error', {
+            code: 'ALREADY_IN_ROOM',
+            message: 'Você já está em outra sala nesta conta. Saia antes de entrar em uma nova.',
+          });
+          return;
+        }
+      }
+    }
 
     try {
       const room = await this.roomsService.joinRoom(client.userId, data.roomCode);

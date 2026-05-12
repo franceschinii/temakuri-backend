@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { RoomsService } from '../rooms/rooms.service.js';
 import { UpdateUserDto, ResetPasswordDto, UpdateStatsDto, ModerationDto } from './dto/admin.dto.js';
 
 const USER_SELECT = {
@@ -26,7 +27,68 @@ const USER_SELECT = {
 
 @Injectable()
 export class AdminService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private roomsService: RoomsService,
+  ) {}
+
+  async findAllRooms() {
+    const rooms = await this.prisma.room.findMany({
+      include: { players: { include: { user: { select: { id: true, username: true, isBot: true, isGuest: true, avatarIndex: true } } } } },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+    return rooms.map(r => ({
+      id: r.id,
+      code: r.code,
+      status: r.status,
+      mode: r.mode,
+      maxPlayers: r.maxPlayers,
+      isPrivate: r.isPrivate,
+      createdAt: r.createdAt,
+      startedAt: r.startedAt,
+      endedAt: r.endedAt,
+      hostId: r.hostId,
+      players: r.players.map(rp => ({
+        userId: rp.userId,
+        username: rp.user?.username ?? 'Unknown',
+        seat: rp.seat,
+        status: rp.status,
+        isBot: rp.user?.isBot ?? false,
+        avatarIndex: rp.user?.avatarIndex ?? 0,
+      })),
+    }));
+  }
+
+  async adminDeleteRoom(code: string) {
+    const room = await this.prisma.room.findUnique({
+      where: { code },
+      include: { players: { include: { user: { select: { id: true, isBot: true, isGuest: true } } } } },
+    });
+    if (!room) throw new NotFoundException('Sala não encontrada');
+
+    const ephemeralIds = room.players
+      .filter(rp => rp.user?.isBot || rp.user?.isGuest)
+      .map(rp => rp.userId);
+
+    await this.prisma.gameResult.deleteMany({ where: { roomId: room.id } });
+    await this.prisma.room.delete({ where: { id: room.id } });
+
+    if (ephemeralIds.length > 0) {
+      await this.roomsService['deleteEphemeralUsers'](ephemeralIds);
+    }
+  }
+
+  async adminKickPlayer(code: string, userId: string) {
+    const room = await this.prisma.room.findUnique({ where: { code } });
+    if (!room) throw new NotFoundException('Sala não encontrada');
+    await this.prisma.roomPlayer.deleteMany({ where: { roomId: room.id, userId } });
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { isGuest: true, isBot: true } });
+    if (user?.isGuest || user?.isBot) {
+      await this.roomsService['deleteEphemeralUsers']([userId]);
+    }
+    return this.roomsService.findByCode(code);
+  }
 
   async findAllUsers() {
     return this.prisma.user.findMany({
