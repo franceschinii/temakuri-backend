@@ -1,0 +1,13 @@
+{
+  "rootDir": "..",
+  "testEnvironment": "node",
+  "transform": {
+    "^.+\\.tsx?$": ["@swc/jest", { "swcrc": false, "jsc": { "parser": { "syntax": "typescript", "decorators": true, "dynamicImport": true }, "transform": { "legacyDecorator": true, "decoratorMetadata": true } } }]
+  },
+  "moduleNameMapper": {
+    "^(\\.{1,2}/.*)\\.js$": "$1"
+  },
+  "testRegex": ".e2e-spec\\.ts$",
+  "testTimeout": 30000,
+  "globalSetup": "<rootDir>/test/jest-global-setup.ts"
+}
