@@ -9,21 +9,21 @@ export class ShopController {
 
   @Get('catalog')
   getCatalog(@Request() req: any) {
-    return this.shopService.getCatalog(req.user.userId);
+    return this.shopService.getCatalog(req.user.id);
   }
 
   @Get('inventory')
   getInventory(@Request() req: any) {
-    return this.shopService.getInventory(req.user.userId);
+    return this.shopService.getInventory(req.user.id);
   }
 
   @Post('avatar/:index')
   purchaseAvatar(@Request() req: any, @Param('index', ParseIntPipe) index: number) {
-    return this.shopService.purchaseAvatar(req.user.userId, index);
+    return this.shopService.purchaseAvatar(req.user.id, index);
   }
 
   @Post('mode/:mode')
   purchaseMode(@Request() req: any, @Param('mode') mode: string) {
-    return this.shopService.purchaseMode(req.user.userId, mode.toUpperCase());
+    return this.shopService.purchaseMode(req.user.id, mode.toUpperCase());
   }
 }

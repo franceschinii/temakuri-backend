@@ -7,9 +7,10 @@
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
 import { Server, WebSocket } from 'ws';
-import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MatchmakingService, QueueEntry } from './matchmaking.service.js';
 import { RoomsService } from '../rooms/rooms.service.js';
+import { PrismaService } from '../prisma/prisma.service.js';
 
 interface AuthenticatedSocket extends WebSocket {
   userId?: string;
@@ -26,6 +27,7 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
     private matchmaking: MatchmakingService,
     private rooms: RoomsService,
     private events: EventEmitter2,
+    private prisma: PrismaService,
   ) {}
 
   handleDisconnect(client: AuthenticatedSocket) {
@@ -41,6 +43,21 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
     if (!client.userId || !client.username) return;
 
     const type: 'RANKED' | 'QUICK' = data.type === 'RANKED' ? 'RANKED' : 'QUICK';
+
+    if (type === 'RANKED') {
+      const user = await this.prisma.user.findUnique({
+        where: { id: client.userId },
+        select: { level: true, rankedSuspendedUntil: true },
+      });
+      if (!user || (user.level ?? 1) < 10) {
+        this.send(client, 'matchmaking:error', { message: 'Nível 10 necessário para ranked' });
+        return;
+      }
+      if (user.rankedSuspendedUntil && user.rankedSuspendedUntil > new Date()) {
+        this.send(client, 'matchmaking:error', { message: 'Você está suspenso do ranked' });
+        return;
+      }
+    }
 
     const entry: QueueEntry = {
       userId: client.userId,
