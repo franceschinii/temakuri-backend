@@ -186,26 +186,24 @@ export class GameEngine {
     events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
 
     if (player.hand.length === 0) {
-      this.playersWithEmptyHand.add(userId);
-      const active = this.activePlayers();
-      const stillHaveCards = active.filter(p => !this.playersWithEmptyHand.has(p.userId));
-
       events.push({ type: 'game:player_hand_empty', payload: { userId } });
 
-      if (stillHaveCards.length === 1) {
-        const loserId = stillHaveCards[0].userId;
-        return { success: true, events: [...events, ...this.resolveRoundEnd(loserId)] };
-      }
+      // Quem zera a mão primeiro vence a rodada — o último com cartas perde.
+      const active = this.activePlayers();
+      const stillHaveCards = active.filter(p => p.userId !== userId && p.hand.length > 0);
 
       if (stillHaveCards.length === 0) {
-        // Todos esvaziaram ao mesmo tempo — edge case teórico. Nova rodada sem perdedor.
+        // Todos zeraram ao mesmo tempo — edge case teórico, nova rodada sem perdedor.
         return { success: true, events: [...events, ...this.startRound()] };
       }
 
-      // Mais de 1 ainda com cartas — jogo continua
-      this.advanceTurn();
-      events.push({ type: 'game:turn_started', payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS } });
-      return { success: true, events };
+      // Quem tem mais cartas na mão perde; empate resolve por maior seat.
+      const loser = stillHaveCards.reduce((worst, p) => {
+        if (p.hand.length > worst.hand.length) return p;
+        if (p.hand.length === worst.hand.length && p.seat > worst.seat) return p;
+        return worst;
+      });
+      return { success: true, events: [...events, ...this.resolveRoundEnd(loser.userId)] };
     }
 
     this.advanceTurn();
