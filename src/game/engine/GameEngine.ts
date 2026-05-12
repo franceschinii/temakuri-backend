@@ -53,7 +53,6 @@ export class GameEngine {
   private saborTriggersThisGame = 0;
   private tricksWon: Record<string, number> = {};
   private pendingDraws: Map<string, Card> = new Map();
-  private playersWithEmptyHand: Set<string> = new Set();
   private trickPileForPick: Card[] = [];
   private discardPile: Card[] = [];
   private isFirstTurn = false;
@@ -135,7 +134,6 @@ export class GameEngine {
 
     this.phase = 'PLAYER_TURN';
     this.isFirstTurn = true;
-    this.playersWithEmptyHand = new Set();
 
     const events: EngineEvent[] = [];
 
@@ -235,8 +233,6 @@ export class GameEngine {
     if (drawnCard) {
       const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
       player.hand.splice(clampedInsert, 0, drawnCard);
-      // Player has cards again — clear empty-hand tracking so round-end logic stays correct
-      this.playersWithEmptyHand.delete(userId);
     }
 
     this.consecutivePasses++;
@@ -332,7 +328,6 @@ export class GameEngine {
     if (action === 'insert') {
       const clamped = Math.max(0, Math.min(insertAtIndex, player.hand.length));
       player.hand.splice(clamped, 0, pickedPlate);
-      this.playersWithEmptyHand.delete(userId);
       events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
     } else {
       this.discardPile.push(pickedPlate);
@@ -399,7 +394,6 @@ export class GameEngine {
       const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
       player.hand.splice(clampedInsert, 0, drawnCard);
       cardAddedToHand = true;
-      this.playersWithEmptyHand.delete(userId);
     }
     // 'discard': drawnCard vai para o descarte
     if (action === 'discard' && drawnCard) {
@@ -539,8 +533,6 @@ export class GameEngine {
     if (action === 'take') {
       const clamped = Math.max(0, Math.min(insertAtIndex, player.hand.length));
       player.hand.splice(clamped, 0, ...resolvedCards);
-      // Player has cards again — clear empty-hand tracking
-      this.playersWithEmptyHand.delete(userId);
       events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
     } else {
       // Discard: add trick pile to server-side discard pile
