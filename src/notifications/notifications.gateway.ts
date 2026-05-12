@@ -561,7 +561,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       this.broadcastToRoom(roomCode, 'lobby:game_starting', { countdown: STARTING_COUNTDOWN_MS });
 
       setTimeout(async () => {
-        const freshRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
+        let freshRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
+        if (!freshRoom || freshRoom.status !== 'WAITING') return;
+
+        // Fill empty seats with bots before starting
+        await this.roomsService.fillWithBots(roomCode);
+        freshRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
         if (!freshRoom || freshRoom.status !== 'WAITING') return;
 
         this.roomReadyMap.delete(roomCode);
