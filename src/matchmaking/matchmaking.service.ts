@@ -12,6 +12,7 @@ export interface QueueEntry {
 
 const PDS_RANGE = 200;
 const RELAX_AFTER_MS = 60_000;
+const QUICK_SOLO_WAIT_MS = 30_000; // wait 30s before launching solo (bots will fill)
 
 @Injectable()
 export class MatchmakingService {
@@ -46,9 +47,16 @@ export class MatchmakingService {
     if (queue.length === 0) return null;
 
     if (type === 'QUICK') {
-      // With 4+ grab all 4; otherwise take what we have (bots will fill)
-      const take = Math.min(queue.length, 4);
-      return queue.splice(0, take);
+      // 2+ players: fire immediately (fill remaining seats with bots at start)
+      if (queue.length >= 2) {
+        return queue.splice(0, Math.min(queue.length, 4));
+      }
+      // 1 player: wait QUICK_SOLO_WAIT_MS before launching solo with bots
+      const now = Date.now();
+      if (queue[0] && now - queue[0].joinedAt >= QUICK_SOLO_WAIT_MS) {
+        return queue.splice(0, 1);
+      }
+      return null;
     }
 
     // RANKED: prefer PDS proximity, relax after 60s

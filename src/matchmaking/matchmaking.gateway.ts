@@ -23,12 +23,26 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
+  private soloCheckInterval: NodeJS.Timeout;
+
   constructor(
     private matchmaking: MatchmakingService,
     private rooms: RoomsService,
     private events: EventEmitter2,
     private prisma: PrismaService,
-  ) {}
+  ) {
+    // Poll every 5s to fire solo players who have waited long enough
+    this.soloCheckInterval = setInterval(() => {
+      for (const type of ['QUICK', 'RANKED'] as const) {
+        const matched = this.matchmaking.tryMatch(type);
+        if (matched) {
+          this.createMatch(matched, type).catch(() => {
+            for (const p of matched) this.matchmaking.joinQueue(p);
+          });
+        }
+      }
+    }, 5_000);
+  }
 
   handleDisconnect(client: AuthenticatedSocket) {
     if (!client.userId) return;
