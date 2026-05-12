@@ -20,6 +20,12 @@ export class MatchmakingService {
     ['QUICK', []],
   ]);
 
+  // Tracks rooms awaiting confirmation so we don't double-fire
+  private pendingRooms = new Set<string>();
+
+  markRoomPending(roomCode: string) { this.pendingRooms.add(roomCode); }
+  clearRoomPending(roomCode: string) { this.pendingRooms.delete(roomCode); }
+
   joinQueue(entry: QueueEntry): void {
     const queue = this.queues.get(entry.type)!;
     const idx = queue.findIndex(e => e.userId === entry.userId);
@@ -34,32 +40,42 @@ export class MatchmakingService {
     }
   }
 
+  // Returns up to 4 players to seed a room. With < 4, bots fill later.
   tryMatch(type: 'RANKED' | 'QUICK'): QueueEntry[] | null {
     const queue = this.queues.get(type)!;
-    if (queue.length < 4) return null;
+    if (queue.length === 0) return null;
 
     if (type === 'QUICK') {
-      return queue.splice(0, 4);
+      // With 4+ grab all 4; otherwise take what we have (bots will fill)
+      const take = Math.min(queue.length, 4);
+      return queue.splice(0, take);
     }
 
+    // RANKED: prefer PDS proximity, relax after 60s
     const now = Date.now();
     const anyRelaxed = queue.some(e => now - e.joinedAt >= RELAX_AFTER_MS);
 
-    if (anyRelaxed) {
-      return queue.splice(0, 4);
+    if (queue.length >= 4) {
+      if (anyRelaxed) return queue.splice(0, 4);
+
+      for (let i = 0; i <= queue.length - 4; i++) {
+        const anchor = queue[i].pds;
+        const group = queue.filter(e => Math.abs(e.pds - anchor) <= PDS_RANGE);
+        if (group.length >= 4) {
+          const matched = group.slice(0, 4);
+          for (const entry of matched) {
+            const idx = queue.indexOf(entry);
+            if (idx !== -1) queue.splice(idx, 1);
+          }
+          return matched;
+        }
+      }
+      return null;
     }
 
-    for (let i = 0; i <= queue.length - 4; i++) {
-      const anchor = queue[i].pds;
-      const group = queue.filter(e => Math.abs(e.pds - anchor) <= PDS_RANGE);
-      if (group.length >= 4) {
-        const matched = group.slice(0, 4);
-        for (const entry of matched) {
-          const idx = queue.indexOf(entry);
-          if (idx !== -1) queue.splice(idx, 1);
-        }
-        return matched;
-      }
+    // < 4 players: only fire when the oldest has been waiting >= RELAX_AFTER_MS
+    if (anyRelaxed) {
+      return queue.splice(0, queue.length);
     }
 
     return null;

@@ -36,6 +36,20 @@ export class ProfileController {
     return { available: true };
   }
 
+  @Get('leaderboard')
+  @ApiOperation({ summary: 'Get top 100 leaderboard' })
+  getLeaderboard() {
+    return this.profileService.getLeaderboard();
+  }
+
+  @Get('leaderboard/me')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get my leaderboard rank' })
+  getMyLeaderboardRank(@CurrentUser('id') userId: string) {
+    return this.profileService.getLeaderboardRankForUser(userId);
+  }
+
   @Get(':userId')
   @ApiOperation({ summary: 'Get public profile' })
   getPublicProfile(@Param('userId') userId: string) {

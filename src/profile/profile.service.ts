@@ -49,4 +49,57 @@ export class ProfileService {
       stats: user.stats,
     };
   }
+
+  async getLeaderboard() {
+    const users = await this.prisma.user.findMany({
+      where: { isGuest: false, isBot: false, isBanned: false, pds: { gt: 0 } },
+      orderBy: { pds: 'desc' },
+      take: 100,
+      select: {
+        id: true,
+        username: true,
+        avatarIndex: true,
+        level: true,
+        pds: true,
+        winStreak: true,
+        rankedStats: { select: { rankedWins: true, rankedLosses: true } },
+      },
+    });
+
+    return users.map((u, i) => ({
+      rank: i + 1,
+      userId: u.id,
+      username: u.username,
+      avatarIndex: u.avatarIndex,
+      level: u.level,
+      pds: u.pds,
+      winStreak: u.winStreak,
+      rankedWins: u.rankedStats?.rankedWins ?? 0,
+      rankedLosses: u.rankedStats?.rankedLosses ?? 0,
+    }));
+  }
+
+  async getLeaderboardRankForUser(userId: string): Promise<{ rank: number | null }> {
+    const count = await this.prisma.user.count({
+      where: { isGuest: false, isBot: false, isBanned: false, pds: { gt: 0 } },
+    });
+
+    if (count === 0) return { rank: null };
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { pds: true, isGuest: true, isBot: true, isBanned: true },
+    });
+
+    if (!user || user.isGuest || user.isBot || user.isBanned || user.pds <= 0) {
+      return { rank: null };
+    }
+
+    const above = await this.prisma.user.count({
+      where: { isGuest: false, isBot: false, isBanned: false, pds: { gt: user.pds } },
+    });
+
+    const rank = above + 1;
+    return { rank: rank <= 100 ? rank : null };
+  }
 }

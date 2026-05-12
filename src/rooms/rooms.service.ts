@@ -256,6 +256,15 @@ export class RoomsService {
     return updated;
   }
 
+  async fillWithBots(code: string) {
+    const room = await this.prisma.room.findUnique({ where: { code }, include: { players: true } });
+    if (!room || room.status !== 'WAITING') return;
+    const needed = room.maxPlayers - room.players.length;
+    for (let i = 0; i < needed; i++) {
+      try { await this.addBot(code, room.hostId); } catch { break; }
+    }
+  }
+
   async removeBot(code: string, hostUserId: string, botUserId: string) {
     const room = await this.prisma.room.findUnique({ where: { code }, include: { players: true } });
     if (!room) throw new NotFoundException('Room not found');
