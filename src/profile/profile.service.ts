@@ -31,6 +31,11 @@ export class ProfileService {
     return rest;
   }
 
+  async isUsernameTaken(username: string): Promise<boolean> {
+    const existing = await this.prisma.user.findUnique({ where: { username } });
+    return !!existing;
+  }
+
   async getPublicProfile(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },

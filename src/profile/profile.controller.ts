@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Patch, Body, Param, Query, UseGuards, NotFoundException } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ProfileService } from './profile.service.js';
 import { UpdateProfileDto } from './dto/profile.dto.js';
@@ -24,6 +24,16 @@ export class ProfileController {
   @ApiOperation({ summary: 'Update my profile' })
   updateProfile(@CurrentUser('id') userId: string, @Body() dto: UpdateProfileDto) {
     return this.profileService.updateProfile(userId, dto);
+  }
+
+  @Get('check-username')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Check if username is available' })
+  async checkUsername(@Query('username') username: string) {
+    const taken = await this.profileService.isUsernameTaken(username);
+    if (taken) throw new NotFoundException('Username taken');
+    return { available: true };
   }
 
   @Get(':userId')
