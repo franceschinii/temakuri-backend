@@ -123,10 +123,18 @@ export class RoomsService {
       }
       await this.prisma.room.delete({ where: { id: room.id } });
     } else {
-      // Non-host guest leaving — free their username immediately
+      // Non-host leaving — free username if guest
       const leaving = await this.prisma.user.findUnique({ where: { id: userId }, select: { isGuest: true } });
       if (leaving?.isGuest) {
         await this.deleteEphemeralUsers([userId]);
+      }
+
+      // If no players remain after this person leaves, close the room
+      const remaining = room.players.filter(p => p.userId !== userId);
+      if (remaining.length === 0) {
+        await this.prisma.room.delete({ where: { id: room.id } });
+        if (!room.isPrivate) this.events.emit('rooms.public.changed');
+        return;
       }
     }
 
