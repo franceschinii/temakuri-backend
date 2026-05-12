@@ -64,6 +64,7 @@ export interface ClientGameState {
   saborMinRequired: number;
   consecutivePasses: number;
   myHand: Card[];
+  discardPileCount: number;
   // Duelo: Pratos do Dia de cada jogador (chave = userId)
   duelPlates: Record<string, Card[]> | null;
   myDuelPlates: Card[] | null;
