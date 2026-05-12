@@ -188,22 +188,8 @@ export class GameEngine {
     if (player.hand.length === 0) {
       events.push({ type: 'game:player_hand_empty', payload: { userId } });
 
-      // Quem zera a mão primeiro vence a rodada — o último com cartas perde.
-      const active = this.activePlayers();
-      const stillHaveCards = active.filter(p => p.userId !== userId && p.hand.length > 0);
-
-      if (stillHaveCards.length === 0) {
-        // Todos zeraram ao mesmo tempo — edge case teórico, nova rodada sem perdedor.
-        return { success: true, events: [...events, ...this.startRound()] };
-      }
-
-      // Quem tem mais cartas na mão perde; empate resolve por maior seat.
-      const loser = stillHaveCards.reduce((worst, p) => {
-        if (p.hand.length > worst.hand.length) return p;
-        if (p.hand.length === worst.hand.length && p.seat > worst.seat) return p;
-        return worst;
-      });
-      return { success: true, events: [...events, ...this.resolveRoundEnd(loser.userId)] };
+      // Quem esvazia a mão perde 1 prato — rodada encerra imediatamente.
+      return { success: true, events: [...events, ...this.resolveRoundEnd(userId)] };
     }
 
     this.advanceTurn();
