@@ -1,4 +1,4 @@
-import { IsString, IsIn, IsInt, IsNumber, Min, Max, IsBoolean, IsOptional } from 'class-validator';
+import { IsString, IsIn, IsInt, IsNumber, Min, Max, IsBoolean, IsOptional, MaxLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateRoomDto {
@@ -35,4 +35,10 @@ export class CreateRoomDto {
   @IsBoolean()
   @IsOptional()
   isRanked?: boolean;
+
+  @ApiPropertyOptional({ maxLength: 32 })
+  @IsString()
+  @MaxLength(32)
+  @IsOptional()
+  password?: string;
 }

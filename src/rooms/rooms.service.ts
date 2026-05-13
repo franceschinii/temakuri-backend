@@ -35,6 +35,7 @@ export class RoomsService {
         isRanked: dto.isRanked ?? false,
         handBias: dto.handBias ?? 0,
         initialTokens: dto.initialTokens ?? 2,
+        password: dto.password?.trim() || null,
         status: 'WAITING',
         players: {
           create: { userId: hostId, seat: 0, status: 'CONNECTED' },
@@ -88,6 +89,7 @@ export class RoomsService {
         isRanked: dto.isRanked ?? false,
         handBias: dto.handBias ?? 0,
         initialTokens: dto.initialTokens ?? 2,
+        password: dto.password?.trim() || null,
         status: 'WAITING',
         players: {
           create: { userId: hostId, seat: 0, status: 'CONNECTED' },
@@ -124,15 +126,19 @@ export class RoomsService {
     return this.formatRoom(room);
   }
 
-  async joinRoom(userId: string, code: string) {
+  async joinRoom(userId: string, code: string, password?: string) {
     const room = await this.prisma.room.findUnique({
       where: { code },
       include: { players: true },
     });
     if (!room) throw new NotFoundException('Room not found');
 
-    // Gate de modo para não-TRADITIONAL (apenas para novos membros, não para reconexão)
     const existing = room.players.find(p => p.userId === userId);
+    if (!existing && room.password && password !== room.password) {
+      throw new ForbiddenException('Senha incorreta');
+    }
+
+    // Gate de modo para não-TRADITIONAL (apenas para novos membros, não para reconexão)
     if (!existing && room.isRanked) {
       const joiner = await this.prisma.user.findUnique({ where: { id: userId }, select: { isGuest: true, isBot: true, level: true, rankedSuspendedUntil: true } });
       if (!joiner || joiner.isGuest || joiner.isBot) throw new ForbiddenException('Convidados não podem jogar ranqueadas');
@@ -154,8 +160,6 @@ export class RoomsService {
 
     if (room.status === 'IN_PROGRESS') {
       // Entra como espectador — aguarda próxima rodada (reset da sala)
-      const activePlayers = room.players.filter(rp => rp.status !== 'SPECTATOR');
-      if (activePlayers.length >= room.maxPlayers) throw new BadRequestException('Sala cheia');
       const usedSeats = new Set(room.players.map(p => p.seat));
       let seat = 0;
       while (usedSeats.has(seat)) seat++;
@@ -166,7 +170,17 @@ export class RoomsService {
     }
 
     if (room.status !== 'WAITING') throw new BadRequestException('Room already started');
-    if (room.players.length >= room.maxPlayers) throw new BadRequestException('Room is full');
+
+    // Sala WAITING lotada: entra como espectador aguardando vaga
+    if (room.players.length >= room.maxPlayers) {
+      const usedSeats = new Set(room.players.map(p => p.seat));
+      let seat = 0;
+      while (usedSeats.has(seat)) seat++;
+      await this.prisma.roomPlayer.create({
+        data: { roomId: room.id, userId, seat, status: 'SPECTATOR' },
+      });
+      return this.findByCode(code);
+    }
 
     const usedSeats = new Set(room.players.map(p => p.seat));
     let seat = 0;
@@ -223,6 +237,21 @@ export class RoomsService {
         await this.prisma.room.delete({ where: { id: room.id } });
         if (!room.isPrivate) this.events.emit('rooms.public.changed');
         return;
+      }
+
+      // Sala WAITING: promove o primeiro espectador aguardando para jogador ativo
+      if (room.status === 'WAITING') {
+        const activePlayers = room.players.filter(p => p.userId !== userId && p.status !== 'SPECTATOR');
+        if (activePlayers.length < room.maxPlayers) {
+          const spectator = room.players.find(p => p.userId !== userId && p.status === 'SPECTATOR');
+          if (spectator) {
+            await this.prisma.roomPlayer.update({
+              where: { id: spectator.id },
+              data: { status: 'CONNECTED' },
+            });
+            this.events.emit('rooms.spectator_promoted', { roomCode: room.code, userId: spectator.userId });
+          }
+        }
       }
     }
 
@@ -577,6 +606,7 @@ export class RoomsService {
       isRanked: room.isRanked ?? false,
       handBias: room.handBias ?? 0,
       initialTokens: room.initialTokens ?? 2,
+      hasPassword: !!room.password,
       players: room.players.map((rp: any) => ({
         userId: rp.userId,
         username: rp.user?.username ?? 'Unknown',

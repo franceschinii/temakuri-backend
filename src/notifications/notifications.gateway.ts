@@ -115,26 +115,36 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       } else {
         // Room in WAITING: remove guest immediately (they only exist while connected)
         const disconnectedRoomCode = client.roomCode;
-        this.roomsService.leaveRoomIfGuest(client.userId, disconnectedRoomCode).then(async removed => {
-          if (removed) {
-            // Verifica se sala de matchmaking ficou sem humanos após a saída do guest
+        const disconnectedUserId = client.userId;
+        this.roomsService.leaveRoomIfGuest(disconnectedUserId, disconnectedRoomCode).then(async removed => {
+          // After guest removal (or registered user disconnect), check if room should close
+          const room = await this.roomsService.findByCode(disconnectedRoomCode!).catch(() => null);
+          if (!room || room.status !== 'WAITING') {
             if (this.matchmakingRooms.has(disconnectedRoomCode!)) {
-              const room = await this.roomsService.findByCode(disconnectedRoomCode!).catch(() => null);
-              if (!room || room.status !== 'WAITING') {
-                this.matchmakingRooms.delete(disconnectedRoomCode!);
-              } else {
-                const humanPlayers = room.players.filter((p: any) => !p.isBot);
-                if (humanPlayers.length === 0) {
-                  await this.roomsService.leaveRoom(room.hostId, disconnectedRoomCode!).catch(() => {});
-                  this.roomReadyMap.delete(disconnectedRoomCode!);
-                  this.matchmakingRooms.delete(disconnectedRoomCode!);
-                  this.roomSockets.delete(disconnectedRoomCode!);
-                  return;
-                }
-              }
+              this.matchmakingRooms.delete(disconnectedRoomCode!);
             }
-            this.roomsService.findByCode(disconnectedRoomCode!).then(room => {
-              this.broadcastToRoom(disconnectedRoomCode!, 'lobby:room_updated', { room });
+            return;
+          }
+
+          // Count humans still connected (has at least one active socket)
+          const humanPlayers = room.players.filter((p: any) => !p.isBot);
+          const connectedHumans = humanPlayers.filter((p: any) => {
+            const sockets = this.userSockets.get(p.userId);
+            return sockets && sockets.size > 0;
+          });
+
+          if (connectedHumans.length === 0) {
+            // No humans left — close the room
+            await this.roomsService.leaveRoom(room.hostId, disconnectedRoomCode!).catch(() => {});
+            this.roomReadyMap.delete(disconnectedRoomCode!);
+            this.matchmakingRooms.delete(disconnectedRoomCode!);
+            this.roomSockets.delete(disconnectedRoomCode!);
+            return;
+          }
+
+          if (removed) {
+            this.roomsService.findByCode(disconnectedRoomCode!).then(updated => {
+              this.broadcastToRoom(disconnectedRoomCode!, 'lobby:room_updated', { room: updated });
             }).catch(() => {});
           }
         }).catch(() => {});
@@ -146,7 +156,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   @SubscribeMessage('lobby:join_room')
-  async handleJoinRoom(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string }) {
+  async handleJoinRoom(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; password?: string }) {
     if (!client.userId) throw new WsException('Unauthorized');
 
     // Bloquear se o userId já está em outra sala com qualquer outro socket
@@ -164,7 +174,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
 
     try {
-      const room = await this.roomsService.joinRoom(client.userId, data.roomCode);
+      const room = await this.roomsService.joinRoom(client.userId, data.roomCode, data.password);
       client.roomCode = data.roomCode;
 
       if (!this.roomSockets.has(data.roomCode)) {
@@ -180,7 +190,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         this.sendToUser(client.userId, 'game:spectator_mode', { roomCode: data.roomCode });
       }
     } catch (e: any) {
-      this.sendToClient(client, 'lobby:error', { code: 'ROOM_NOT_FOUND', message: e.message });
+      const isWrongPassword = e?.message === 'Senha incorreta' || e?.status === 403;
+      this.sendToClient(client, 'lobby:error', {
+        code: isWrongPassword ? 'WRONG_PASSWORD' : 'ROOM_NOT_FOUND',
+        message: e.message,
+      });
     }
   }
 
@@ -336,11 +350,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return;
 
+    const spectatorCount = this.getSpectatorCount(data.roomCode, engine);
+
     // Espectador: registra presença mas não altera estado do engine
     if (!engine.hasPlayer(client.userId)) {
       const state = engine.getClientStateFor(client.userId);
       state.myHand = [];
-      this.sendToClient(client, 'game:state_sync', { state });
+      this.sendToClient(client, 'game:state_sync', { state, spectatorCount, isSpectator: true });
       return;
     }
 
@@ -348,17 +364,27 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.dispatchEvents(data.roomCode, events);
 
     const state = engine.getClientStateFor(client.userId);
-    this.sendToClient(client, 'game:state_sync', { state });
+    this.sendToClient(client, 'game:state_sync', { state, spectatorCount, isSpectator: false });
+  }
+
+  private getSpectatorCount(roomCode: string, engine: import('../game/engine/GameEngine.js').GameEngine): number {
+    const sockets = this.roomSockets.get(roomCode);
+    if (!sockets) return 0;
+    let count = 0;
+    sockets.forEach(ws => {
+      if (ws.userId && !engine.hasPlayer(ws.userId)) count++;
+    });
+    return count;
   }
 
   @SubscribeMessage('game:play_cards')
-  handlePlayCards(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; cardIndices: number[] }) {
+  handlePlayCards(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; cardIndices: number[]; plateIndices?: number[] }) {
     if (!client.userId) return;
 
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return this.sendToClient(client, 'game:error', { code: 'ROOM_NOT_FOUND', message: 'Game not found' });
 
-    const result = engine.applyPlayCards(client.userId, data.cardIndices);
+    const result = engine.applyPlayCards(client.userId, data.cardIndices, data.plateIndices);
     if (!result.success) {
       return this.sendToClient(client, 'game:error', { code: 'INVALID_PLAY', message: result.reason });
     }
@@ -493,6 +519,20 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (now - lastReaction < 3000) return;
     this.reactionCooldowns.set(client.userId, now);
     this.broadcastToRoomExcept(data.roomCode, client, 'game:reaction', { userId: client.userId, emoji: data.emoji });
+  }
+
+  @SubscribeMessage('lobby:chat_send')
+  handleLobbyChatSend(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; text: string }) {
+    const userId = client.userId;
+    const username = client.username;
+    if (!userId || !username) return;
+    const now = Date.now();
+    const lastMsg = this.chatCooldowns.get(userId) ?? 0;
+    if (now - lastMsg < 1500) return;
+    this.chatCooldowns.set(userId, now);
+    const text = (data.text ?? '').trim().slice(0, 200);
+    if (!text) return;
+    this.broadcastToRoom(data.roomCode, 'lobby:chat_message', { userId, username, text, ts: now });
   }
 
   @SubscribeMessage('game:send_message')
@@ -675,6 +715,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     // This event exists for future cross-module listeners.
   }
 
+  @OnEvent('rooms.spectator_promoted')
+  async handleSpectatorPromoted({ roomCode, userId }: { roomCode: string; userId: string }) {
+    this.sendToUser(userId, 'lobby:promoted_to_player', { roomCode });
+    const room = await this.roomsService.findByCode(roomCode).catch(() => null);
+    if (room) this.broadcastToRoom(roomCode, 'lobby:room_updated', { room });
+  }
+
   @OnEvent('rooms.lobby.changed')
   broadcastLobbyRoomChanged({ roomCode, room }: { roomCode: string; room: unknown }) {
     this.broadcastToRoom(roomCode, 'lobby:room_updated', { room });
@@ -689,9 +736,16 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   private dispatchEvents(roomCode: string, events: EngineEvent[]) {
+    const engine = this.roomManager.get(roomCode);
     for (const event of events) {
       if (event.targetUserId) {
         this.sendToUser(event.targetUserId, event.type, event.payload);
+      } else if (event.type === 'game:turn_started' && engine) {
+        // Piggyback spectatorCount on turn_started so players see live updates
+        this.broadcastToRoom(roomCode, event.type, {
+          ...(event.payload as object),
+          spectatorCount: this.getSpectatorCount(roomCode, engine),
+        });
       } else {
         this.broadcastToRoom(roomCode, event.type, event.payload);
       }

@@ -59,6 +59,8 @@ export class GameEngine {
   // Modo Duelo (2 jogadores): Pratos do Dia por jogador
   private duelPlates: Map<string, Card[]> = new Map();
   private pendingDuelPick: string | null = null; // userId aguardando escolha de Prato do Dia
+  // Contagem de passes por jogador na rodada atual (Duelo: 3 passes = derrota)
+  private duelPassCount: Map<string, number> = new Map();
 
   private initialTokens: number;
 
@@ -69,7 +71,7 @@ export class GameEngine {
     this.initialTokens = initialTokens;
   }
 
-  addPlayer(userId: string, username: string, avatarIndex: number, seat: number, meta?: { isBot?: boolean; isAdmin?: boolean; level?: number; pds?: number; sessionWins?: number }) {
+  addPlayer(userId: string, username: string, avatarIndex: number, seat: number, meta?: { isBot?: boolean; isGuest?: boolean; isAdmin?: boolean; level?: number; pds?: number; sessionWins?: number }) {
     this.players.push({
       userId,
       username,
@@ -158,9 +160,11 @@ export class GameEngine {
     // Modo Duelo: distribuir 2 Pratos do Dia abertos por jogador
     if (this.isDuel()) {
       this.duelPlates = new Map();
+      this.duelPassCount = new Map();
       activePlayers.forEach(p => {
         const plates = this.drawPile.splice(0, 2);
         this.duelPlates.set(p.userId, plates);
+        this.duelPassCount.set(p.userId, 0);
       });
     }
 
@@ -191,7 +195,7 @@ export class GameEngine {
       type: 'game:round_started',
       payload: {
         round: this.round,
-        drawPileCount: this.drawPile.length,
+        drawPileCount: this.isDuel() ? 0 : this.drawPile.length,
         cardCounts,
         duelPlates: this.isDuel() ? this.getDuelPlates() : null,
         market: this.market ?? null,
@@ -206,24 +210,47 @@ export class GameEngine {
     return events;
   }
 
-  applyPlayCards(userId: string, cardIndices: number[]): EngineResult {
+  applyPlayCards(userId: string, cardIndices: number[], plateIndices?: number[]): EngineResult {
     if (this.phase !== 'PLAYER_TURN') return this.fail('Not the right phase');
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
 
     const player = this.findPlayer(userId)!;
+
+    // Resolve plate cards being combined with this play (Duelo only)
+    let selectedPlateCards: Card[] | undefined;
+    if (plateIndices && plateIndices.length > 0) {
+      if (!this.isDuel()) return this.fail('Plate combination only available in Duel mode');
+      const plates = this.duelPlates.get(userId) ?? [];
+      if (plateIndices.some(i => i < 0 || i >= plates.length)) return this.fail('Invalid plate index');
+      selectedPlateCards = plateIndices.map(i => plates[i]);
+    }
+
     const validation = validatePlayIndices(
       player.hand,
       cardIndices,
       this.pile,
       this.saborActive,
       this.saborMinRequired,
+      selectedPlateCards,
     );
 
     if (!validation.valid) return this.fail(validation.reason!);
 
+    // Remove hand cards
     const sorted = [...cardIndices].sort((a, b) => a - b);
-    const playedCards = sorted.map(i => player.hand[i]);
+    const handPlayedCards = sorted.map(i => player.hand[i]);
     player.hand = player.hand.filter((_, i) => !sorted.includes(i));
+
+    // Remove plates used in this play
+    if (selectedPlateCards && plateIndices && plateIndices.length > 0) {
+      const currentPlates = this.duelPlates.get(userId) ?? [];
+      const remainingPlates = currentPlates.filter((_, i) => !plateIndices.includes(i));
+      this.duelPlates.set(userId, remainingPlates);
+    }
+
+    const playedCards = selectedPlateCards
+      ? [...handPlayedCards, ...selectedPlateCards]
+      : handPlayedCards;
 
     const saborTriggered = isSabor(playedCards);
     this.pile = playedCards;
@@ -244,7 +271,17 @@ export class GameEngine {
       events.push({ type: 'game:sabor_broken', payload: { brokenBy: userId } });
     }
 
-    events.push({ type: 'game:cards_played', payload: { userId, cards: playedCards, isSabor: saborTriggered } });
+    const usedPlates = selectedPlateCards && selectedPlateCards.length > 0;
+    events.push({
+      type: 'game:cards_played',
+      payload: {
+        userId,
+        cards: playedCards,
+        isSabor: saborTriggered,
+        usedPlates: usedPlates ? selectedPlateCards : undefined,
+        remainingPlates: usedPlates ? (this.duelPlates.get(userId) ?? []) : undefined,
+      },
+    });
     events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
 
     if (player.hand.length === 0) {
@@ -283,7 +320,7 @@ export class GameEngine {
     const events: EngineEvent[] = [];
     events.push({
       type: 'game:turn_passed',
-      payload: { userId, drawnCard, drawPileCount: this.drawPile.length },
+      payload: { userId, drawnCard, drawPileCount: this.isDuel() ? 0 : this.drawPile.length },
     });
     if (drawnCard) {
       events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
@@ -384,18 +421,18 @@ export class GameEngine {
     }
 
     this.consecutivePasses++;
+
+    // Duelo: contar passes individuais — 3 passes do mesmo jogador = derrota
+    const passCount = (this.duelPassCount.get(userId) ?? 0) + 1;
+    this.duelPassCount.set(userId, passCount);
+
     events.push({
       type: 'game:duel_plate_used',
-      payload: { userId, plateIndex, action, remainingPlates, drawnCard: action === 'insert' ? pickedPlate : null },
+      payload: { userId, plateIndex, action, remainingPlates, drawnCard: action === 'insert' ? pickedPlate : null, duelPassCount: passCount },
     });
 
-    const activePlayers = this.activePlayers();
-    if (this.consecutivePasses >= activePlayers.length - 1) {
-      if (this.pile.length === 0) {
-        return { success: true, events: [...events, ...this.resolveStalemate(activePlayers)] };
-      }
-      const wipeWinner = this.lastPlayerId ?? userId;
-      return { success: true, events: [...events, ...this.resolveWipe(wipeWinner)] };
+    if (passCount >= 3) {
+      return { success: true, events: [...events, ...this.resolveRoundEnd(userId)] };
     }
 
     this.advanceTurn();
@@ -466,7 +503,7 @@ export class GameEngine {
         userId,
         drawnCard: cardAddedToHand ? drawnCard : null,
         discardedCard: !cardAddedToHand && drawnCard ? drawnCard : null,
-        drawPileCount: this.drawPile.length,
+        drawPileCount: this.isDuel() ? 0 : this.drawPile.length,
       },
     });
     if (cardAddedToHand) {
@@ -535,7 +572,7 @@ export class GameEngine {
       currentTurnUserId: this.currentPlayer()?.userId ?? '',
       players: this.players.map(p => this.toPublicPlayer(p)),
       pile: this.pile,
-      drawPileCount: this.drawPile.length,
+      drawPileCount: this.isDuel() ? 0 : this.drawPile.length,
       discardPileCount: this.discardPile.length,
       market: this.market,
       saborActive: this.saborActive,
