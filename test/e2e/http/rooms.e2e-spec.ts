@@ -168,7 +168,7 @@ describe('Rooms (e2e)', () => {
       expect(res.body.status).toBe('WAITING');
     });
 
-    it('não-host recebe 401 (sem guarda de host no controller)', async () => {
+    it('não-host consegue resetar (sem guarda de host no controller) — retorna 201', async () => {
       const r = await createRoom(app, auth.tokens.alice, {});
       const res = await resetRoom(app, auth.tokens.bob, r.code);
       // resetRoom controller does not check host ownership — any authed user can reset
