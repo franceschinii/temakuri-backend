@@ -85,6 +85,39 @@ export class GameEngine {
     this.tricksWon[userId] = 0;
   }
 
+  /**
+   * @internal — testing only.
+   * Substitui partes do estado interno do engine para cenários determinísticos
+   * em testes unitários. Não use em código de produção.
+   */
+  _setStateForTest(state: {
+    hands?: Record<string, Card[]>;
+    deck?: Card[];
+    pile?: Card[];
+    duelPlates?: Record<string, Card[]>;
+    tokens?: Record<string, number>;
+  }): void {
+    if (state.hands) {
+      for (const [userId, hand] of Object.entries(state.hands)) {
+        const player = this.players.find(p => p.userId === userId);
+        if (player) player.hand = [...hand];
+      }
+    }
+    if (state.deck !== undefined) this.drawPile = [...state.deck];
+    if (state.pile !== undefined) this.pile = [...state.pile];
+    if (state.duelPlates) {
+      for (const [userId, plates] of Object.entries(state.duelPlates)) {
+        this.duelPlates.set(userId, [...plates]);
+      }
+    }
+    if (state.tokens) {
+      for (const [userId, n] of Object.entries(state.tokens)) {
+        const player = this.players.find(p => p.userId === userId);
+        if (player) player.tokensLeft = n;
+      }
+    }
+  }
+
   hasPlayer(userId: string): boolean {
     return this.players.some(p => p.userId === userId);
   }

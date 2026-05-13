@@ -530,3 +530,37 @@ describe('anti-fraude', () => {
     expect(result.reason).toMatch(/Invalid pick index/);
   });
 });
+
+describe('GameEngine — _setStateForTest helper', () => {
+  test('injeta mãos específicas nos jogadores', () => {
+    const { engine, ids } = makeEngine('TRADITIONAL', 2);
+    engine.startRound();
+
+    const hand1 = [card(7, 'SUSHI'), card(7, 'SUSHI')];
+    const hand2 = [card(1, 'PIZZA'), card(1, 'PIZZA')];
+    engine._setStateForTest({
+      hands: { [ids[0]]: hand1, [ids[1]]: hand2 },
+    });
+
+    const state1 = engine.getClientStateFor(ids[0]);
+    expect(state1.myHand).toEqual(hand1);
+    const state2 = engine.getClientStateFor(ids[1]);
+    expect(state2.myHand).toEqual(hand2);
+  });
+
+  test('injeta pilha vazia', () => {
+    const { engine } = makeEngine('TRADITIONAL', 2);
+    engine.startRound();
+    engine._setStateForTest({ pile: [] });
+    const state = engine.getClientStateFor('p1');
+    expect(state.pile).toHaveLength(0);
+  });
+
+  test('injeta deck pequeno', () => {
+    const { engine } = makeEngine('TRADITIONAL', 2);
+    engine.startRound();
+    engine._setStateForTest({ deck: [card(1, 'SUSHI'), card(2, 'RAMEN')] });
+    const state = engine.getClientStateFor('p1');
+    expect(state.drawPileCount).toBe(2);
+  });
+});
