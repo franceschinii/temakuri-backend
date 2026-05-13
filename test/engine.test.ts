@@ -762,6 +762,34 @@ describe('anti-fraude', () => {
     expect(result.success).toBe(false);
     expect(result.reason).toMatch(/insertAtIndex out of range/);
   });
+
+  test('jogada com value menor que pilha (mesmo count) é rejeitada', () => {
+    const { engine, ids } = makeEngine('TRADITIONAL', 2);
+    engine.startRound();
+    engine._setStateForTest({
+      hands: { [ids[0]]: [card(2, 'SUSHI', 's1'), card(2, 'SUSHI', 's2'), card(7, 'PIZZA', 'p1')] },
+      pile: [card(5, 'PIZZA', 'pile1'), card(5, 'PIZZA', 'pile2')],
+    });
+    // ids[0] tenta jogar 2 cartas de valor 2, contra pilha de 2 cartas de valor 5
+    const result = engine.applyPlayCards(ids[0], [0, 1]);
+    expect(result.success).toBe(false);
+  });
+
+  test('applyInsertDrawn fora de fase é rejeitado', () => {
+    const { engine, ids } = makeEngine('RODIZIO', 4);
+    engine.startRound();
+    // Não chama applyDrawCard antes (não está em PASS_PICK), só tenta inserir
+    const result = engine.applyInsertDrawn(ids[0], 0, 'insert');
+    expect(result.success).toBe(false);
+  });
+
+  test('applyTrickPick fora de fase é rejeitado', () => {
+    const { engine, ids } = makeEngine('TRADITIONAL', 2);
+    engine.startRound();
+    // Sem wipe prévio (não está em TRICK_PICK)
+    const result = engine.applyTrickPick(ids[0], 'take');
+    expect(result.success).toBe(false);
+  });
 });
 
 describe('GameEngine — _setStateForTest helper', () => {
