@@ -967,3 +967,35 @@ describe('GameEngine — GAME_OVER state', () => {
     expect(first.tokensLeft).toBeLessThanOrEqual(last.tokensLeft);
   });
 });
+
+describe('GameEngine — edge: deck pequeno', () => {
+  test('drawPile esgotado: applyDrawCard se comporta sem crash em RODIZIO', () => {
+    const { engine, ids } = makeEngine('RODIZIO', 4);
+    engine.startRound();
+    engine._setStateForTest({ deck: [] });
+    // applyDrawCard pode retornar success=false ou disparar fim-de-rodada
+    const result = engine.applyDrawCard(ids[0]);
+    const state = engine.getClientStateFor(ids[0]);
+    // Critério: ou success=false, ou state.phase mudou indicando reação a deck vazio
+    expect(result.success === false || state.phase !== 'PLAYER_TURN').toBe(true);
+    // Drawing pile count permanece 0 (não foi adicionado nada artificialmente)
+    expect(state.drawPileCount).toBe(0);
+  });
+
+  test('MERCADO com drawPile pequeno mantém invariantes do mercado', () => {
+    const { engine, ids } = makeEngine('MERCADO', 2);
+    engine.startRound();
+    // Esgota o drawPile deixando apenas 1 carta
+    engine._setStateForTest({ deck: [card(1, 'SUSHI', 'x1')] });
+    // Precisa de um wipe para que ids[0] se torne o wipe winner e possa chamar applyMarketSwap
+    engine.applyPlayCards(ids[0], [0]);
+    engine.applyPassTurn(ids[1], 0); // wipe → ids[0] vence
+    const marketSizeBefore = engine.getClientStateFor(ids[0]).market!.length;
+    // Mercado swap não deve crashar mesmo com deck quase vazio
+    const result = engine.applyMarketSwap(ids[0], 0, 0);
+    expect(result.success).toBe(true);
+    const state = engine.getClientStateFor(ids[0]);
+    // Mercado mantém o mesmo tamanho (swap é 1-por-1, não há refill — descoberta de Task 8)
+    expect(state.market!.length).toBe(marketSizeBefore);
+  });
+});
