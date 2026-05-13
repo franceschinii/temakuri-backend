@@ -152,7 +152,7 @@ export class GameEngine {
       type: 'game:round_started',
       payload: {
         round: this.round,
-        drawPileCount: this.drawPile.length,
+        drawPileCount: this.isDuel() ? 0 : this.drawPile.length,
         cardCounts,
         duelPlates: this.isDuel() ? this.getDuelPlates() : null,
         market: this.market ?? null,
@@ -240,7 +240,7 @@ export class GameEngine {
     const events: EngineEvent[] = [];
     events.push({
       type: 'game:turn_passed',
-      payload: { userId, drawnCard, drawPileCount: this.drawPile.length },
+      payload: { userId, drawnCard, drawPileCount: this.isDuel() ? 0 : this.drawPile.length },
     });
     if (drawnCard) {
       events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
@@ -409,7 +409,7 @@ export class GameEngine {
         userId,
         drawnCard: cardAddedToHand ? drawnCard : null,
         discardedCard: !cardAddedToHand && drawnCard ? drawnCard : null,
-        drawPileCount: this.drawPile.length,
+        drawPileCount: this.isDuel() ? 0 : this.drawPile.length,
       },
     });
     if (cardAddedToHand) {
@@ -478,7 +478,7 @@ export class GameEngine {
       currentTurnUserId: this.currentPlayer()?.userId ?? '',
       players: this.players.map(p => this.toPublicPlayer(p)),
       pile: this.pile,
-      drawPileCount: this.drawPile.length,
+      drawPileCount: this.isDuel() ? 0 : this.drawPile.length,
       discardPileCount: this.discardPile.length,
       market: this.market,
       saborActive: this.saborActive,
