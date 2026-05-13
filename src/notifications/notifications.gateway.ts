@@ -760,10 +760,18 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         this.broadcastToRoom(roomCode, event.type, event.payload);
       }
 
-      // Arm turn timer whenever a new turn starts
+      // Arm turn timer whenever a new turn starts or a pick dialog is offered
       if (event.type === 'game:turn_started') {
         const { userId, timeoutMs } = event.payload as { userId: string; timeoutMs: number };
         this.armTurnTimer(roomCode, userId, timeoutMs);
+      } else if (
+        event.type === 'game:trick_pick_offer' ||
+        event.type === 'game:duel_pass_offer' ||
+        event.type === 'game:card_drawn'
+      ) {
+        // Pick dialogs/draw have no turn_started — arm timer so AFK player doesn't freeze the game
+        const userId = event.targetUserId!;
+        this.armTurnTimer(roomCode, userId, 20_000);
       }
     }
   }
