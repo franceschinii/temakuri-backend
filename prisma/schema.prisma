@@ -71,6 +71,7 @@ model Room {
   isRanked       Boolean    @default(false)
   handBias       Float      @default(0)
   initialTokens  Int        @default(2)
+  password       String?
   createdAt      DateTime   @default(now())
   startedAt  DateTime?
   endedAt    DateTime?

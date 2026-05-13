@@ -495,6 +495,20 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.broadcastToRoomExcept(data.roomCode, client, 'game:reaction', { userId: client.userId, emoji: data.emoji });
   }
 
+  @SubscribeMessage('lobby:chat_send')
+  handleLobbyChatSend(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; text: string }) {
+    const userId = client.userId;
+    const username = client.username;
+    if (!userId || !username) return;
+    const now = Date.now();
+    const lastMsg = this.chatCooldowns.get(userId) ?? 0;
+    if (now - lastMsg < 1500) return;
+    this.chatCooldowns.set(userId, now);
+    const text = (data.text ?? '').trim().slice(0, 200);
+    if (!text) return;
+    this.broadcastToRoom(data.roomCode, 'lobby:chat_message', { userId, username, text, ts: now });
+  }
+
   @SubscribeMessage('game:send_message')
   handleMessage(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; text: string }) {
     const userId = client.userId;
