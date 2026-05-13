@@ -15,6 +15,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { RoomManager } from '../game/room-manager.js';
 import { RoomsService } from '../rooms/rooms.service.js';
+import { PrismaService } from '../prisma/prisma.service.js';
 import { EngineEvent } from '../game/engine/GameEngine.js';
 import { WS_HEARTBEAT_INTERVAL, STARTING_COUNTDOWN_MS } from '../common/constants/game.constants.js';
 import type { QueueEntry } from '../matchmaking/matchmaking.service.js';
@@ -60,6 +61,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     private roomManager: RoomManager,
     private roomsService: RoomsService,
     private events: EventEmitter2,
+    private prisma: PrismaService,
   ) {}
 
   afterInit() {
@@ -91,6 +93,16 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     try {
       const payload = await this.jwt.verifyAsync(token, { secret: this.config.get('JWT_SECRET') });
       const userId: string = payload.sub;
+
+      const userStillExists = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true },
+      });
+      if (!userStillExists) {
+        client.close(4001, 'Stale token');
+        return;
+      }
+
       client.userId = userId;
       client.username = payload.username;
 

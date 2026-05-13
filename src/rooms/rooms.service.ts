@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateRoomDto } from './dto/room.dto.js';
@@ -84,9 +84,10 @@ export class RoomsService {
   }
 
   async create(hostId: string, dto: CreateRoomDto) {
-    // Host nao pode estar banido
+    // Host nao pode estar banido + valida que o usuário ainda existe
+    // (defesa contra JWT stale após o usuário ser removido do banco).
     const host = await this.prisma.user.findUnique({ where: { id: hostId } });
-    if (!host) throw new NotFoundException('Host not found');
+    if (!host) throw new UnauthorizedException('Sessão expirada — entre novamente');
     if (host.isBanned) throw new ForbiddenException('Você está banido e não pode criar salas');
 
     if (dto.isRanked) {
