@@ -116,15 +116,12 @@ export class RoomsService {
     return rooms.map(r => this.formatRoom(r));
   }
 
-  async findByCode(code: string, password?: string) {
+  async findByCode(code: string) {
     const room = await this.prisma.room.findUnique({
       where: { code },
       include: { players: { include: { user: true } } },
     });
     if (!room) throw new NotFoundException('Room not found');
-    if (room.password && password !== room.password) {
-      throw new ForbiddenException('Senha incorreta');
-    }
     return this.formatRoom(room);
   }
 

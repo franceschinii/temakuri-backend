@@ -18,8 +18,8 @@ export class RoomsController {
 
   @Get(':code')
   @ApiOperation({ summary: 'Get room by code' })
-  findOne(@Param('code') code: string, @Query('password') password?: string) {
-    return this.roomsService.findByCode(code, password);
+  findOne(@Param('code') code: string) {
+    return this.roomsService.findByCode(code);
   }
 
   @Post()

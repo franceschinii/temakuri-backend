@@ -190,7 +190,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         this.sendToUser(client.userId, 'game:spectator_mode', { roomCode: data.roomCode });
       }
     } catch (e: any) {
-      this.sendToClient(client, 'lobby:error', { code: 'ROOM_NOT_FOUND', message: e.message });
+      const isWrongPassword = e?.message === 'Senha incorreta' || e?.status === 403;
+      this.sendToClient(client, 'lobby:error', {
+        code: isWrongPassword ? 'WRONG_PASSWORD' : 'ROOM_NOT_FOUND',
+        message: e.message,
+      });
     }
   }
 
