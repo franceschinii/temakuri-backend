@@ -152,7 +152,19 @@ export class GameEngine {
     // Em RODIZIO, a partir da 2ª rodada as mãos já foram rotacionadas por
     // rotateHands() em resolveRoundEnd — não redistribuímos o baralho para
     // preservar o efeito da rotação.
-    if (!(this.mode === 'RODIZIO' && this.round > 1)) {
+    const deckRegenerated = !(this.mode === 'RODIZIO' && this.round > 1);
+    if (deckRegenerated) {
+      // Zera coleções residuais ANTES de redistribuir. buildDeck() gera
+      // cartas com IDs determinísticos (`${value}-${variantIndex}`), então
+      // cartas que sobraram no discardPile / pendingDraws da rodada
+      // anterior compartilham IDs com o novo deck — sem este reset, a
+      // checagem de integridade explode (duplicatas crescendo a cada rodada).
+      this.discardPile = [];
+      this.pendingDraws = new Map();
+      this.duelPlates = new Map();
+      this.duelPassCount = new Map();
+      this.market = null;
+
       const { hands, drawPile } = dealCards(activePlayers.map(p => p.userId), this.handBias);
       activePlayers.forEach(p => { p.hand = hands.get(p.userId) ?? []; });
       this.drawPile = drawPile;
