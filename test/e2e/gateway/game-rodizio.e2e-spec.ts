@@ -55,13 +55,21 @@ describe('Gateway — Game RODIZIO (e2e)', () => {
     await alice.waitFor('game:turn_started', 5000);
     alice.clearEvents();
     alice.send('game:draw_card', { roomCode: room.code });
-    // Pode dar erro privado (não é turno do alice) OU sucesso silencioso
-    // Aceita qualquer um dos dois — o que NÃO queremos é o servidor crashar
+    // Pode dar erro privado (não é turno do alice) OU sucesso silencioso.
+    // Ambos os desfechos são válidos: alice pode ou não ser o jogador ativo após
+    // turn_started. O que NÃO queremos é crash ou um código de erro inesperado.
     await new Promise((r) => setTimeout(r, 500));
     // Se chegou game:error, está OK (é erro privado). Se nada chegou, também OK.
     const errors = alice.events.get('game:error') ?? [];
-    // Apenas garante que algum sinal coerente aconteceu
-    expect(errors.length).toBeGreaterThanOrEqual(0);
+    // O comportamento depende de quem está no turno após start. Em qualquer caso:
+    // 1. Se houver erro privado, deve ser um dos códigos esperados (não crash)
+    // 2. Se não houver erro, alice estava no turno e foi processado
+    if (errors.length > 0) {
+      expect(errors[0]).toMatchObject({
+        code: expect.stringMatching(/NOT_YOUR_TURN|WRONG_PHASE|INVALID_PLAY|NOT_FIRST_TURN|INVALID_PICK/),
+      });
+    }
+    expect(errors.length).toBeLessThanOrEqual(1);
     alice.close();
   });
 });
