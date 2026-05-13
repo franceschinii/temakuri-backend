@@ -136,6 +136,7 @@ export class GameEngine {
   startRound(): EngineEvent[] {
     this.round++;
     this.pile = [];
+    this.trickPileForPick = [];
     this.saborActive = false;
     this.saborMinRequired = 0;
     this.consecutivePasses = 0;
@@ -420,9 +421,9 @@ export class GameEngine {
       this.discardPile.push(pickedPlate);
     }
 
-    this.consecutivePasses++;
-
-    // Duelo: contar passes individuais — 3 passes do mesmo jogador = derrota
+    // Duelo usa duelPassCount por jogador — consecutivePasses global causaria
+    // término prematuro da rodada (resolveWipe/Stalemate dispara quando atinge
+    // activePlayers.length - 1, que em duelo é 1).
     const passCount = (this.duelPassCount.get(userId) ?? 0) + 1;
     this.duelPassCount.set(userId, passCount);
 
@@ -467,7 +468,11 @@ export class GameEngine {
   }
 
   applyInsertDrawn(userId: string, insertAtIndex: number, action: 'insert' | 'discard' = 'insert'): EngineResult {
-    if (this.phase !== 'PASS_PICK') return this.fail('Not in pick phase');
+    if (this.phase !== 'PASS_PICK') {
+      // Defensive: limpa pending draw para evitar vazamento se a fase já tiver mudado
+      this.pendingDraws.delete(userId);
+      return this.fail('Not in pick phase');
+    }
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
 
     const drawnCard = this.pendingDraws.get(userId) ?? null;

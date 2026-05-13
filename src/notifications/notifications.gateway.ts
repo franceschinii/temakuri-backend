@@ -135,6 +135,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
           if (connectedHumans.length === 0) {
             // No humans left — close the room
+            this.clearTurnTimer(disconnectedRoomCode!);
             await this.roomsService.leaveRoom(room.hostId, disconnectedRoomCode!).catch(() => {});
             this.roomReadyMap.delete(disconnectedRoomCode!);
             this.matchmakingRooms.delete(disconnectedRoomCode!);
