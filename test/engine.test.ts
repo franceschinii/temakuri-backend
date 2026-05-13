@@ -519,7 +519,10 @@ describe('GameEngine — modo RODIZIO', () => {
     expect(engine.getMode()).toBe('RODIZIO');
   });
 
-  test('rotateHands é invocado e round incrementa após fim de rodada em RODIZIO', () => {
+  test('fim de rodada em RODIZIO incrementa round e emite round_ended', () => {
+    // Nota: o engine chama rotateHands() em resolveRoundEnd, mas o startRound()
+    // que vem em seguida re-distribui o baralho, então a rotação não tem
+    // efeito observável. Este teste cobre apenas o fluxo de fim de rodada.
     // Com 4 jogadores RODIZIO: disparar fim de rodada via mão vazia (p1 joga última carta).
     // rotateHands() é chamado dentro de resolveRoundEnd → startRound incrementa round.
     const { engine, ids } = makeEngine('RODIZIO', 4);
