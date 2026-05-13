@@ -549,18 +549,28 @@ describe('GameEngine — _setStateForTest helper', () => {
   });
 
   test('injeta pilha vazia', () => {
-    const { engine } = makeEngine('TRADITIONAL', 2);
+    const { engine, ids } = makeEngine('TRADITIONAL', 2);
     engine.startRound();
     engine._setStateForTest({ pile: [] });
-    const state = engine.getClientStateFor('p1');
+    const state = engine.getClientStateFor(ids[0]);
     expect(state.pile).toHaveLength(0);
   });
 
   test('injeta deck pequeno', () => {
-    const { engine } = makeEngine('TRADITIONAL', 2);
+    const { engine, ids } = makeEngine('TRADITIONAL', 2);
     engine.startRound();
     engine._setStateForTest({ deck: [card(1, 'SUSHI'), card(2, 'RAMEN')] });
-    const state = engine.getClientStateFor('p1');
+    const state = engine.getClientStateFor(ids[0]);
     expect(state.drawPileCount).toBe(2);
+  });
+
+  test('injeta tokens em jogadores', () => {
+    const { engine, ids } = makeEngine('TRADITIONAL', 2);
+    engine.startRound();
+    engine._setStateForTest({ tokens: { [ids[0]]: 0, [ids[1]]: 5 } });
+    const state0 = engine.getClientStateFor(ids[0]);
+    const state1 = engine.getClientStateFor(ids[1]);
+    expect(state0.players.find(p => p.userId === ids[0])!.tokensLeft).toBe(0);
+    expect(state1.players.find(p => p.userId === ids[1])!.tokensLeft).toBe(5);
   });
 });
