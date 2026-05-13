@@ -63,6 +63,7 @@ export class GameEngine {
   private duelPassCount: Map<string, number> = new Map();
 
   private initialTokens: number;
+  private integrityCheckEnabled = true;
 
   constructor(roomCode: string, mode: GameMode, handBias = 0, initialTokens = INITIAL_TOKENS) {
     this.roomCode = roomCode;
@@ -99,6 +100,8 @@ export class GameEngine {
     duelPlates?: Record<string, Card[]>;
     tokens?: Record<string, number>;
   }): void {
+    // Estado injetado raramente totaliza 63 cartas — desabilita o invariante
+    this.integrityCheckEnabled = false;
     if (state.hands) {
       for (const [userId, hand] of Object.entries(state.hands)) {
         const player = this.players.find(p => p.userId === userId);
@@ -254,6 +257,8 @@ export class GameEngine {
       : handPlayedCards;
 
     const saborTriggered = isSabor(playedCards);
+    // Pile anterior fica em previousPile — se houver, jogador entra em TRICK_PICK (regra A2)
+    const previousPile = this.pile;
     this.pile = playedCards;
     this.consecutivePasses = 0;
     this.lastPlayerId = userId;
@@ -287,13 +292,30 @@ export class GameEngine {
 
     if (player.hand.length === 0) {
       events.push({ type: 'game:player_hand_empty', payload: { userId } });
-      // Quem esvazia a mão perde 1 prato. Ao chegar a 0 pratos, vence o jogo.
+      // Mão vazia: a pile anterior (se houver) vai pro descarte automaticamente — sem A2,
+      // pois o jogador venceu a rodada.
+      if (previousPile.length > 0) this.discardPile.push(...previousPile);
       return { success: true, events: [...events, ...this.resolveRoundEnd(userId)] };
     }
 
+    // Regra A2: se havia pile anterior, jogador escolhe pegar ou descartar antes do próximo turno
+    if (previousPile.length > 0) {
+      this.trickPileForPick = [...previousPile];
+      this.phase = 'TRICK_PICK';
+      events.push({
+        type: 'game:trick_pick_offer',
+        payload: { pile: this.trickPileForPick },
+        targetUserId: userId,
+      });
+      this.assertCardIntegrity();
+      return { success: true, events };
+    }
+
+    // Pile estava vazia: sem A2, só avança o turno
     this.advanceTurn();
     events.push({ type: 'game:turn_started', payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS } });
 
+    this.assertCardIntegrity();
     return { success: true, events };
   }
 
@@ -330,16 +352,19 @@ export class GameEngine {
     const activePlayers = this.activePlayers();
     if (this.consecutivePasses >= activePlayers.length - 1) {
       if (this.pile.length === 0) {
-        // Todos passaram sem ninguém jogar nada — jogador com mais cartas na mão perde
-        return { success: true, events: [...events, ...this.resolveStalemate(activePlayers)] };
+        const stalemate = this.resolveStalemate(activePlayers);
+        this.assertCardIntegrity();
+        return { success: true, events: [...events, ...stalemate] };
       }
       const wipeWinner = this.lastPlayerId ?? userId;
-      return { success: true, events: [...events, ...this.resolveWipe(wipeWinner)] };
+      const wipe = this.resolveWipe(wipeWinner);
+      return { success: true, events: [...events, ...wipe] };
     }
 
     this.advanceTurn();
     events.push({ type: 'game:turn_started', payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS } });
 
+    this.assertCardIntegrity();
     return { success: true, events };
   }
 
@@ -518,15 +543,19 @@ export class GameEngine {
     const activePlayers = this.activePlayers();
     if (this.consecutivePasses >= activePlayers.length - 1) {
       if (this.pile.length === 0) {
-        return { success: true, events: [...events, ...this.resolveStalemate(activePlayers)] };
+        const stalemate = this.resolveStalemate(activePlayers);
+        this.assertCardIntegrity();
+        return { success: true, events: [...events, ...stalemate] };
       }
       const wipeWinner = this.lastPlayerId ?? userId;
-      return { success: true, events: [...events, ...this.resolveWipe(wipeWinner)] };
+      const wipe = this.resolveWipe(wipeWinner);
+      return { success: true, events: [...events, ...wipe] };
     }
 
     this.advanceTurn();
     events.push({ type: 'game:turn_started', payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS } });
 
+    this.assertCardIntegrity();
     return { success: true, events };
   }
 
@@ -598,25 +627,26 @@ export class GameEngine {
   }
 
   private resolveWipe(wiperId: string): EngineEvent[] {
+    // Regra: quando todos passam, a pile vai pro descarte automaticamente
+    // e o último jogador (wiper) vira inicial com área vazia.
     this.lastWiperId = wiperId;
     this.tricksWon[wiperId] = (this.tricksWon[wiperId] ?? 0) + 1;
     this.consecutivePasses = 0;
     this.saborActive = false;
     this.saborMinRequired = 0;
 
+    const wipedCount = this.pile.length;
+    if (this.pile.length > 0) this.discardPile.push(...this.pile);
+    this.pile = [];
+
     const wiperIndex = this.activePlayers().findIndex(p => p.userId === wiperId);
     this.currentTurnIndex = wiperIndex;
+    this.phase = 'PLAYER_TURN';
 
-    this.trickPileForPick = [...this.pile];
-    this.phase = 'TRICK_PICK';
-
+    this.assertCardIntegrity();
     return [
-      { type: 'game:wipe', payload: { winnerId: wiperId, pileCount: this.trickPileForPick.length } },
-      {
-        type: 'game:trick_pick_offer',
-        payload: { pile: this.trickPileForPick },
-        targetUserId: wiperId,
-      },
+      { type: 'game:wipe', payload: { winnerId: wiperId, pileCount: wipedCount } },
+      { type: 'game:turn_started', payload: { userId: wiperId, timeoutMs: TURN_TIMEOUT_MS } },
     ];
   }
 
@@ -636,17 +666,28 @@ export class GameEngine {
       player.hand.splice(insertAtIndex, 0, ...resolvedCards);
       events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
     } else {
-      // Discard: add trick pile to server-side discard pile
       this.discardPile.push(...resolvedCards);
     }
 
     this.trickPileForPick = [];
-    this.pile = [];
     this.phase = 'PLAYER_TURN';
 
-    // Broadcast result to all players so discard pile stays in sync
-    events.push({ type: 'game:trick_pick_result', payload: { userId, action, discardedCards: action === 'discard' ? resolvedCards : [], takenCount: action === 'take' ? resolvedCards.length : 0 } });
-    events.push({ type: 'game:turn_started', payload: { userId, timeoutMs: TURN_TIMEOUT_MS } });
+    events.push({
+      type: 'game:trick_pick_result',
+      payload: {
+        userId,
+        action,
+        discardedCards: action === 'discard' ? resolvedCards : [],
+        takenCount: action === 'take' ? resolvedCards.length : 0,
+      },
+    });
+
+    // Após A2, avança o turno para o próximo jogador. A pile atual fica com a
+    // jogada vencedora que esta acabou de fazer (não é zerada).
+    this.advanceTurn();
+    events.push({ type: 'game:turn_started', payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS } });
+
+    this.assertCardIntegrity();
     return { success: true, events };
   }
 
@@ -722,6 +763,45 @@ export class GameEngine {
   private advanceTurn() {
     const active = this.activePlayers();
     this.currentTurnIndex = (this.currentTurnIndex + 1) % active.length;
+  }
+
+  /**
+   * Invariante: o deck tem exatamente 63 cartas, 9 de cada valor (1-7), IDs únicos.
+   * Soma todas as cartas em qualquer local rastreável (mãos, pile, drawPile, discardPile,
+   * market, plates de duelo, draws pendentes, trickPileForPick) e valida.
+   * Falha silenciosa em prod (log), throw em dev/test via NODE_ENV.
+   */
+  private assertCardIntegrity(): void {
+    if (!this.integrityCheckEnabled) return;
+    const all: Card[] = [
+      ...this.pile,
+      ...this.drawPile,
+      ...this.discardPile,
+      ...this.trickPileForPick,
+      ...this.players.flatMap(p => p.hand),
+      ...(this.market ?? []),
+      ...Array.from(this.duelPlates.values()).flat(),
+      ...Array.from(this.pendingDraws.values()),
+    ];
+    const ids = new Set(all.map(c => c.id));
+    const countsByValue = new Map<number, number>();
+    for (const c of all) countsByValue.set(c.value, (countsByValue.get(c.value) ?? 0) + 1);
+
+    const problems: string[] = [];
+    if (all.length !== 63) problems.push(`total ${all.length}/63`);
+    if (ids.size !== all.length) problems.push(`duplicates: ${all.length - ids.size}`);
+    for (const v of [1, 2, 3, 4, 5, 6, 7]) {
+      const c = countsByValue.get(v) ?? 0;
+      if (c !== 9) problems.push(`value ${v}: ${c}/9`);
+    }
+
+    if (problems.length > 0) {
+      const msg = `[GameEngine] Card integrity broken (room ${this.roomCode}): ${problems.join(', ')}`;
+      if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development') {
+        throw new Error(msg);
+      }
+      console.error(msg);
+    }
   }
 
   private currentPlayer(): PlayerState {

@@ -325,6 +325,8 @@ describe('GameEngine — Sabor', () => {
       pile: [card(2, 'TACO')],
     });
     engine.applyPlayCards(ids[0], [0, 1]); // inicia Sabor (minRequired=2), hand not empty
+    // A2: ids[0] resolveu a pile anterior — descarta para avançar turno
+    engine.applyTrickPick(ids[0], 'discard');
     const r2 = engine.applyPlayCards(ids[1], [0, 1, 2]); // 3 SUSHI continua
     expect(r2.success).toBe(true);
     const state = engine.getClientStateFor(ids[1]);
@@ -347,6 +349,8 @@ describe('GameEngine — Sabor', () => {
     });
     engine.applyPlayCards(ids[0], [0, 1]); // sabor ativo, minRequired=2
     expect(engine.getClientStateFor(ids[0]).saborActive).toBe(true); // guard
+    // A2: ids[0] resolveu a pile anterior — descarta para avançar turno
+    engine.applyTrickPick(ids[0], 'discard');
     engine.applyPlayCards(ids[1], [0, 1]); // 2 cartas, categorias mistas, count >= minRequired
     const state = engine.getClientStateFor(ids[1]);
     expect(state.saborActive).toBe(false); // quebrou
@@ -411,30 +415,26 @@ describe('GameEngine — applyPassTurn', () => {
 
   test('após wipe completo, engine volta pra PLAYER_TURN', () => {
     // Wipe = todos os outros passam consecutivamente após ids[0] jogar.
-    // Com 2 jogadores: ids[0] joga, ids[1] passa → consecutivePasses(1) = activePlayers-1(1) → wipe.
+    // Pelas regras: pile descarta automaticamente, último a jogar vira inicial.
     const { engine, ids } = makeEngine('TRADITIONAL', 2);
     engine.startRound();
     engine._setStateForTest({
       hands: {
-        // ids[0] precisa de pelo menos 2 cartas para sobrar mão após jogar 1
         [ids[0]]: [card(7, 'SUSHI'), card(5, 'RAMEN')],
         [ids[1]]: [card(1, 'PIZZA')],
       },
       pile: [],
     });
-    // ids[0] joga a primeira carta (pilha vazia, qualquer carta vale)
     const playResult = engine.applyPlayCards(ids[0], [0]);
     expect(playResult.success).toBe(true);
-    // ids[1] passa → consecutivePasses=1 = activePlayers-1=1 → wipe, fase vira TRICK_PICK
+    // ids[1] passa → wipe direto, pile descartada, ids[0] continua como turno
     const passResult = engine.applyPassTurn(ids[1], 0);
     expect(passResult.success).toBe(true);
     expect(passResult.events.some(e => e.type === 'game:wipe')).toBe(true);
     expect(passResult.events.find(e => e.type === 'game:wipe')?.payload.winnerId).toBe(ids[0]);
-    // ids[0] descarta a pilha → fase volta para PLAYER_TURN
-    const pickResult = engine.applyTrickPick(ids[0], 'discard');
-    expect(pickResult.success).toBe(true);
     const state = engine.getClientStateFor(ids[0]);
     expect(state.phase).toBe('PLAYER_TURN');
+    expect(state.currentTurnUserId).toBe(ids[0]);
   });
 
   test('inserção em index inválido é rejeitado', () => {
@@ -853,7 +853,7 @@ describe('anti-fraude', () => {
   });
 
   test('applyTrickPick rejeita insertAtIndex fora do range no take', () => {
-    // Setup: forçar TRICK_PICK via wipe (ids[0] joga, ids[1] passa)
+    // Setup: força TRICK_PICK via A2 — ids[0] joga em pile não-vazia
     const { engine, ids } = makeEngine('TRADITIONAL', 2);
     engine.startRound();
     engine._setStateForTest({
@@ -861,11 +861,10 @@ describe('anti-fraude', () => {
         [ids[0]]: [card(5, 'SUSHI', 's1'), card(5, 'SUSHI', 's2')],
         [ids[1]]: [card(2, 'PIZZA', 'p1')],
       },
-      pile: [],
+      pile: [card(3, 'TACO', 'old1')],
     });
-    // ids[0] joga 1 carta; ids[1] passa → wipe → fase TRICK_PICK
+    // ids[0] joga em cima da pile [3] → entra em TRICK_PICK para resolver A2
     engine.applyPlayCards(ids[0], [0]);
-    engine.applyPassTurn(ids[1], 0);
     // 999 está fora do range da mão
     const result = engine.applyTrickPick(ids[0], 'take', 999);
     expect(result.success).toBe(false);
@@ -873,7 +872,7 @@ describe('anti-fraude', () => {
   });
 
   test('applyDuelPassPick rejeita insertAtIndex fora do range', () => {
-    // Setup: reproduzir o cenário do teste "phase DUEL_PASS_PICK aparece..."
+    // Setup: duelo 2P, ids[0] joga em pile vazia, ids[1] passa → DUEL_PASS_PICK em ids[1]
     const { engine, ids } = makeEngine('TRADITIONAL', 2);
     engine.startRound();
     engine._setStateForTest({
@@ -887,12 +886,12 @@ describe('anti-fraude', () => {
         [ids[1]]: [card(4, 'CURRY', 'p-4-curry'), card(7, 'DESSERT', 'p-7-dessert')],
       },
     });
-    // ids[0] joga, ids[1] joga, ids[0] chama applyDrawCard → fase DUEL_PASS_PICK
+    // ids[0] joga em pile vazia (sem A2) → turno avança para ids[1]
     engine.applyPlayCards(ids[0], [0]);
-    engine.applyPlayCards(ids[1], [0]);
-    engine.applyDrawCard(ids[0]);
-    // ids[0] tem 1 carta na mão; 999 está fora do range
-    const result = engine.applyDuelPassPick(ids[0], 0, 'insert', 999);
+    // ids[1] passa → DUEL_PASS_PICK
+    engine.applyDrawCard(ids[1]);
+    // ids[1] tem 2 cartas na mão; 999 está fora do range
+    const result = engine.applyDuelPassPick(ids[1], 0, 'insert', 999);
     expect(result.success).toBe(false);
     expect(result.reason).toMatch(/insertAtIndex out of range/);
   });
@@ -991,12 +990,13 @@ describe('GameEngine — Duelo (2 jogadores)', () => {
         [ids[1]]: [card(4, 'CURRY', 'p-4-curry'), card(7, 'DESSERT', 'p-7-dessert')],
       },
     });
-    // Player 0 joga 1 carta (isFirstTurn passa a false); hand tem 1 restante
+    // Player 0 joga em pile vazia → sem A2, turno avança para player 1
     engine.applyPlayCards(ids[0], [0]);
-    // Player 1 joga 1 carta
+    // Player 1 joga em cima → entra em TRICK_PICK (A2) para resolver pile anterior
     engine.applyPlayCards(ids[1], [0]);
-    // Agora é turno de player 0 novamente — chama applyDrawCard para passar
-    // Em modo Duelo, isso deve disparar DUEL_PASS_PICK (há pratos disponíveis)
+    // Player 1 descarta a pile anterior → turno avança para player 0
+    engine.applyTrickPick(ids[1], 'discard');
+    // Player 0 chama applyDrawCard para passar → DUEL_PASS_PICK
     engine.applyDrawCard(ids[0]);
     const state = engine.getClientStateFor(ids[0]);
     expect(state.phase).toBe('DUEL_PASS_PICK');
