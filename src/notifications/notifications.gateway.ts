@@ -336,11 +336,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return;
 
+    const spectatorCount = this.getSpectatorCount(data.roomCode, engine);
+
     // Espectador: registra presença mas não altera estado do engine
     if (!engine.hasPlayer(client.userId)) {
       const state = engine.getClientStateFor(client.userId);
       state.myHand = [];
-      this.sendToClient(client, 'game:state_sync', { state });
+      this.sendToClient(client, 'game:state_sync', { state, spectatorCount, isSpectator: true });
       return;
     }
 
@@ -348,7 +350,17 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.dispatchEvents(data.roomCode, events);
 
     const state = engine.getClientStateFor(client.userId);
-    this.sendToClient(client, 'game:state_sync', { state });
+    this.sendToClient(client, 'game:state_sync', { state, spectatorCount, isSpectator: false });
+  }
+
+  private getSpectatorCount(roomCode: string, engine: import('../game/engine/GameEngine.js').GameEngine): number {
+    const sockets = this.roomSockets.get(roomCode);
+    if (!sockets) return 0;
+    let count = 0;
+    sockets.forEach(ws => {
+      if (ws.userId && !engine.hasPlayer(ws.userId)) count++;
+    });
+    return count;
   }
 
   @SubscribeMessage('game:play_cards')
@@ -710,9 +722,16 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   private dispatchEvents(roomCode: string, events: EngineEvent[]) {
+    const engine = this.roomManager.get(roomCode);
     for (const event of events) {
       if (event.targetUserId) {
         this.sendToUser(event.targetUserId, event.type, event.payload);
+      } else if (event.type === 'game:turn_started' && engine) {
+        // Piggyback spectatorCount on turn_started so players see live updates
+        this.broadcastToRoom(roomCode, event.type, {
+          ...(event.payload as object),
+          spectatorCount: this.getSpectatorCount(roomCode, engine),
+        });
       } else {
         this.broadcastToRoom(roomCode, event.type, event.payload);
       }
