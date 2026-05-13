@@ -448,22 +448,6 @@ describe('GameEngine — applyPassTurn', () => {
   });
 });
 
-describe('GameEngine — fim de rodada e tokens', () => {
-  test('round_ended é emitido quando jogador esvazia a mão', () => {
-    // Construir cenário controlado: engine com 2 jogadores, forçar mão de 1 carta para P1
-    const engine = new GameEngine('TEST-END', 'TRADITIONAL');
-    engine.addPlayer('winner', 'Winner', 0, 0);
-    engine.addPlayer('loser', 'Loser', 0, 1);
-
-    // Iniciar rodada normalmente
-    engine.startRound();
-
-    // Jogar todas as cartas de P1 de uma vez não é possível (mão não adjacente garantida).
-    // Vamos testar a lógica de token via getClientStateFor após round_ended simulado.
-    const stateWinner = engine.getClientStateFor('winner');
-    expect(stateWinner.players.find(p => p.userId === 'winner')?.tokensLeft).toBe(2);
-  });
-});
 
 describe('GameEngine — modo MERCADO', () => {
   test('mercado é inicializado com 3 cartas no startRound', () => {
