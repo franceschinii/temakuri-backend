@@ -60,6 +60,10 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         ws.ping();
       });
     }, WS_HEARTBEAT_INTERVAL);
+
+    // Limpa salas que ficaram IN_PROGRESS apos restart do servidor.
+    // Engine vive em memoria; sem ele, partida e irrecuperavel.
+    this.roomsService.markOrphanInProgressAsFinished().catch(() => {});
   }
 
   async handleConnection(client: AuthenticatedSocket, req: any) {
@@ -188,6 +192,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
       this.broadcastToRoom(data.roomCode, 'lobby:room_updated', { room });
 
+      // Envia snapshot do readyMap para que o cliente que acabou de entrar
+      // (ou abriu nova aba) sincronize quem ja esta pronto
+      const readySnapshot = Array.from(this.roomReadyMap.get(data.roomCode) ?? []);
+      this.sendToClient(client, 'lobby:ready_snapshot', { ready: readySnapshot });
+
       // Notifica espectador se entrou em partida em andamento
       const isSpectator = room.players.find((p: any) => p.userId === client.userId)?.isSpectator === true;
       if (isSpectator) {
@@ -221,6 +230,8 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.roomBots.delete(data.roomCode);
 
     const updatedRoom = await this.roomsService.resetRoom(data.roomCode, client.userId);
+    // Notifica clientes em /game/:code para voltarem ao lobby
+    this.broadcastToRoom(data.roomCode, 'lobby:room_reset', { roomCode: data.roomCode });
     this.broadcastToRoom(data.roomCode, 'lobby:room_updated', { room: updatedRoom });
   }
 
@@ -258,6 +269,17 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   @SubscribeMessage('lobby:set_ready')
   async handleSetReady(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; ready: boolean }) {
     if (!client.userId) return;
+
+    // Espectadores nao podem marcar ready — poluem o readyMap e bloqueiam start
+    const room = await this.roomsService.findByCode(data.roomCode).catch(() => null);
+    const me = room?.players.find((p: any) => p.userId === client.userId);
+    if (me?.isSpectator) {
+      this.sendToClient(client, 'lobby:error', {
+        code: 'IS_SPECTATOR',
+        message: 'Espectadores não podem marcar pronto',
+      });
+      return;
+    }
 
     const engine = this.roomManager.get(data.roomCode);
     if (engine) {
@@ -321,10 +343,18 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     setTimeout(async () => {
       this.roomReadyMap.delete(data.roomCode);
 
-      const engine = this.roomManager.create(data.roomCode, room.mode as any, room.handBias ?? 0, room.initialTokens ?? 2);
-      room.players.forEach(p => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: (p as any).isBot, isGuest: (p as any).isGuest, isAdmin: (p as any).isAdmin, level: (p as any).level, pds: (p as any).pds, sessionWins: (p as any).sessionWins }));
+      // Re-le a sala apos countdown — jogadores podem ter saido durante esses 3s
+      const freshRoom = await this.roomsService.findByCode(data.roomCode).catch(() => null);
+      if (!freshRoom || freshRoom.status !== 'WAITING' || freshRoom.players.length < 2) {
+        return;
+      }
+      const activePlayers = freshRoom.players.filter((p: any) => !p.isSpectator);
+      if (activePlayers.length < 2) return;
 
-      const bots = new Set<string>(room.players.filter(p => p.isBot).map(p => p.userId));
+      const engine = this.roomManager.create(data.roomCode, freshRoom.mode as any, freshRoom.handBias ?? 0, freshRoom.initialTokens ?? 2);
+      activePlayers.forEach((p: any) => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: p.isBot, isGuest: p.isGuest, isAdmin: p.isAdmin, level: p.level, pds: p.pds, sessionWins: p.sessionWins }));
+
+      const bots = new Set<string>(activePlayers.filter((p: any) => p.isBot).map((p: any) => p.userId));
       this.roomBots.set(data.roomCode, bots);
 
       await this.roomsService.markStarted(data.roomCode);
@@ -344,7 +374,15 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.roomSockets.get(data.roomCode)!.add(client);
 
     const engine = this.roomManager.get(data.roomCode);
-    if (!engine) return;
+    if (!engine) {
+      // Engine nao existe — sala morta (restart do servidor, ja finalizada, etc).
+      // Cliente nao deve ficar esperando state_sync indefinidamente.
+      this.sendToClient(client, 'game:room_closed', {
+        roomCode: data.roomCode,
+        reason: 'A partida foi encerrada ou nao esta mais disponivel.',
+      });
+      return;
+    }
 
     const spectatorCount = this.getSpectatorCount(data.roomCode, engine);
 
@@ -407,7 +445,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
           this.roomManager.destroy(data.roomCode);
           this.roomSockets.delete(data.roomCode);
           this.roomBots.delete(data.roomCode);
-        }, 60_000);
+        }, 5_000);
       }
     }
   }
@@ -603,7 +641,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
               this.roomManager.destroy(roomCode);
               this.roomSockets.delete(roomCode);
               this.roomBots.delete(roomCode);
-            }, 60_000);
+            }, 5_000);
           }
         } else {
           this.scheduleBotMoveIfNeeded(roomCode, currentEngine);
@@ -896,7 +934,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
               this.roomManager.destroy(roomCode);
               this.roomSockets.delete(roomCode);
               this.roomBots.delete(roomCode);
-            }, 60_000);
+            }, 5_000);
           }
         }
       }

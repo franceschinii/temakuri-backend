@@ -14,7 +14,58 @@ export class RoomsService {
   constructor(
     private prisma: PrismaService,
     private events: EventEmitter2,
-  ) {}
+  ) {
+    // Cleanup periodico de salas mortas (FINISHED >24h)
+    // Roda no boot (lazy: 60s depois) e depois a cada 1h.
+    setTimeout(() => this.cleanupStaleRooms().catch(() => {}), 60_000);
+    setInterval(() => this.cleanupStaleRooms().catch(() => {}), 60 * 60 * 1000);
+  }
+
+  /**
+   * Marca como FINISHED salas que ficaram presas em IN_PROGRESS apos restart do servidor.
+   * Engines vivem em memoria, entao sem engine a partida e irrecuperavel.
+   * Chamado uma vez no boot via NotificationsGateway.afterInit.
+   */
+  async markOrphanInProgressAsFinished() {
+    await this.prisma.room.updateMany({
+      where: { status: 'IN_PROGRESS' },
+      data: { status: 'FINISHED', endedAt: new Date() },
+    }).catch(() => {});
+  }
+
+  /**
+   * Remove salas que devem morrer:
+   * - status=FINISHED com endedAt > 24h
+   * - status=WAITING sem players (orfas)
+   * - bots/guests sem RoomPlayer ativo (residuo de salas mortas)
+   */
+  private async cleanupStaleRooms() {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    // Salas FINISHED antigas
+    await this.prisma.room.deleteMany({
+      where: { status: 'FINISHED', endedAt: { lt: cutoff } },
+    }).catch(() => {});
+    // Salas WAITING sem nenhum player
+    const orphans = await this.prisma.room.findMany({
+      where: { status: 'WAITING' },
+      include: { _count: { select: { players: true } } },
+    }).catch(() => []);
+    const emptyIds = orphans.filter(r => r._count.players === 0).map(r => r.id);
+    if (emptyIds.length > 0) {
+      await this.prisma.room.deleteMany({ where: { id: { in: emptyIds } } }).catch(() => {});
+    }
+    // Bots/guests orfaos (sem RoomPlayer)
+    const orphanUsers = await this.prisma.user.findMany({
+      where: {
+        OR: [{ isBot: true }, { isGuest: true }],
+        roomPlayers: { none: {} },
+      },
+      select: { id: true },
+    }).catch(() => []);
+    if (orphanUsers.length > 0) {
+      await this.deleteEphemeralUsers(orphanUsers.map(u => u.id));
+    }
+  }
 
   async createMatchmakingRoom(hostId: string, dto: CreateRoomDto) {
     const room = await this.createRoomWithUniqueCodeRetry({
@@ -33,12 +84,16 @@ export class RoomsService {
   }
 
   async create(hostId: string, dto: CreateRoomDto) {
+    // Host nao pode estar banido
+    const host = await this.prisma.user.findUnique({ where: { id: hostId } });
+    if (!host) throw new NotFoundException('Host not found');
+    if (host.isBanned) throw new ForbiddenException('Você está banido e não pode criar salas');
+
     if (dto.isRanked) {
       if (dto.mode !== 'TRADITIONAL') {
         throw new BadRequestException('Ranked só está disponível no modo Tradicional');
       }
-      const host = await this.prisma.user.findUnique({ where: { id: hostId } });
-      if (!host || (host.level ?? 1) < 10) {
+      if ((host.level ?? 1) < 10) {
         throw new ForbiddenException('Ranqueada requer nível 10 ou superior');
       }
       if (host.rankedSuspendedUntil && host.rankedSuspendedUntil > new Date()) {
@@ -207,11 +262,29 @@ export class RoomsService {
     await this.prisma.roomPlayer.deleteMany({ where: { roomId: room.id, userId } });
 
     if (room.hostId === userId) {
-      // Host leaving closes the room — clean up bots and guests from other players
-      const otherIds = room.players.filter(p => p.userId !== userId).map(p => p.userId);
-      if (otherIds.length > 0) {
+      // Host saindo: tenta promover proximo humano antes de fechar a sala
+      const remaining = room.players.filter(p => p.userId !== userId);
+      const remainingIds = remaining.map(p => p.userId);
+      let newHost: { id: string } | null = null;
+      if (remainingIds.length > 0) {
+        // Procura outro humano (nao bot, nao guest) para promover
+        newHost = await this.prisma.user.findFirst({
+          where: { id: { in: remainingIds }, isBot: false, isGuest: false, isBanned: false },
+          select: { id: true },
+        });
+      }
+
+      if (newHost) {
+        await this.prisma.room.update({ where: { id: room.id }, data: { hostId: newHost.id } });
+        if (!room.isPrivate) this.events.emit('rooms.public.changed');
+        this.events.emit('rooms.host_changed', { roomCode: code, newHostId: newHost.id });
+        return;
+      }
+
+      // Sem humano para promover: limpa bots/guests e fecha a sala
+      if (remainingIds.length > 0) {
         const ephemeral = await this.prisma.user.findMany({
-          where: { id: { in: otherIds }, OR: [{ isBot: true }, { isGuest: true }] },
+          where: { id: { in: remainingIds }, OR: [{ isBot: true }, { isGuest: true }] },
           select: { id: true },
         });
         if (ephemeral.length > 0) {
