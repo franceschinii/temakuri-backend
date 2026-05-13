@@ -354,6 +354,14 @@ export class GameEngine {
     if (plateIndex < 0 || plateIndex >= plates.length) return this.fail('Invalid plate index');
 
     const pickedPlate = plates[plateIndex];
+
+    if (action === 'insert') {
+      const player = this.findPlayer(userId)!;
+      if (insertAtIndex < 0 || insertAtIndex > player.hand.length) {
+        return this.fail('insertAtIndex out of range');
+      }
+    }
+
     const remainingPlates = plates.filter((_, i) => i !== plateIndex);
     this.duelPlates.set(userId, remainingPlates);
     this.pendingDuelPick = null;
@@ -363,8 +371,7 @@ export class GameEngine {
     const events: EngineEvent[] = [];
 
     if (action === 'insert') {
-      const clamped = Math.max(0, Math.min(insertAtIndex, player.hand.length));
-      player.hand.splice(clamped, 0, pickedPlate);
+      player.hand.splice(insertAtIndex, 0, pickedPlate);
       events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
     } else {
       this.discardPile.push(pickedPlate);
@@ -421,6 +428,14 @@ export class GameEngine {
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
 
     const drawnCard = this.pendingDraws.get(userId) ?? null;
+
+    if (action === 'insert' && drawnCard) {
+      const player = this.findPlayer(userId)!;
+      if (insertAtIndex < 0 || insertAtIndex > player.hand.length) {
+        return this.fail('insertAtIndex out of range');
+      }
+    }
+
     this.pendingDraws.delete(userId);
     this.phase = 'PLAYER_TURN';
 
@@ -428,8 +443,7 @@ export class GameEngine {
     let cardAddedToHand = false;
 
     if (action === 'insert' && drawnCard) {
-      const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
-      player.hand.splice(clampedInsert, 0, drawnCard);
+      player.hand.splice(insertAtIndex, 0, drawnCard);
       cardAddedToHand = true;
     }
     // 'discard': drawnCard vai para o descarte
@@ -568,8 +582,10 @@ export class GameEngine {
     const resolvedCards = [...this.trickPileForPick];
 
     if (action === 'take') {
-      const clamped = Math.max(0, Math.min(insertAtIndex, player.hand.length));
-      player.hand.splice(clamped, 0, ...resolvedCards);
+      if (insertAtIndex < 0 || insertAtIndex > player.hand.length) {
+        return this.fail('insertAtIndex out of range');
+      }
+      player.hand.splice(insertAtIndex, 0, ...resolvedCards);
       events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
     } else {
       // Discard: add trick pile to server-side discard pile

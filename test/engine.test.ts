@@ -774,6 +774,75 @@ describe('anti-fraude', () => {
     const result = engine.applyTrickPick(ids[0], 'take');
     expect(result.success).toBe(false);
   });
+
+  test('applyInsertDrawn rejeita insertAtIndex fora do range', () => {
+    // Precisa de 3 jogadores para não entrar em modo Duelo (isDuel = activePlayers === 2)
+    // ids[0] joga para deixar isFirstTurn = false, depois ids[1] puxa → PASS_PICK
+    const { engine, ids } = makeEngine('TRADITIONAL', 3);
+    engine.startRound();
+    engine._setStateForTest({
+      hands: {
+        [ids[0]]: [card(5, 'SUSHI', 's1'), card(3, 'RAMEN', 'r1')],
+        [ids[1]]: [card(2, 'PIZZA', 'p1')],
+        [ids[2]]: [card(4, 'TACO', 't1')],
+      },
+      deck: [card(7, 'CURRY', 'd1')],
+      pile: [],
+    });
+    // ids[0] joga → isFirstTurn = false, turno passa para ids[1]
+    engine.applyPlayCards(ids[0], [0]);
+    // ids[1] puxa carta → fase vira PASS_PICK; mão de ids[1] tem 1 carta
+    engine.applyDrawCard(ids[1]);
+    // 999 está fora do range da mão (mão tem 1 carta → range válido: 0 ou 1)
+    const result = engine.applyInsertDrawn(ids[1], 999, 'insert');
+    expect(result.success).toBe(false);
+    expect(result.reason).toMatch(/insertAtIndex out of range/);
+  });
+
+  test('applyTrickPick rejeita insertAtIndex fora do range no take', () => {
+    // Setup: forçar TRICK_PICK via wipe (ids[0] joga, ids[1] passa)
+    const { engine, ids } = makeEngine('TRADITIONAL', 2);
+    engine.startRound();
+    engine._setStateForTest({
+      hands: {
+        [ids[0]]: [card(5, 'SUSHI', 's1'), card(5, 'SUSHI', 's2')],
+        [ids[1]]: [card(2, 'PIZZA', 'p1')],
+      },
+      pile: [],
+    });
+    // ids[0] joga 1 carta; ids[1] passa → wipe → fase TRICK_PICK
+    engine.applyPlayCards(ids[0], [0]);
+    engine.applyPassTurn(ids[1], 0);
+    // 999 está fora do range da mão
+    const result = engine.applyTrickPick(ids[0], 'take', 999);
+    expect(result.success).toBe(false);
+    expect(result.reason).toMatch(/insertAtIndex out of range/);
+  });
+
+  test('applyDuelPassPick rejeita insertAtIndex fora do range', () => {
+    // Setup: reproduzir o cenário do teste "phase DUEL_PASS_PICK aparece..."
+    const { engine, ids } = makeEngine('TRADITIONAL', 2);
+    engine.startRound();
+    engine._setStateForTest({
+      hands: {
+        [ids[0]]: [card(2, 'SUSHI', 'h-2-sushi'), card(6, 'PIZZA', 'h-6-pizza')],
+        [ids[1]]: [card(3, 'RAMEN', 'h-3-ramen'), card(4, 'CURRY', 'h-4-curry')],
+      },
+      pile: [],
+      duelPlates: {
+        [ids[0]]: [card(2, 'RAMEN', 'p-2-ramen'), card(2, 'BURGER', 'p-2-burger')],
+        [ids[1]]: [card(4, 'CURRY', 'p-4-curry'), card(7, 'DESSERT', 'p-7-dessert')],
+      },
+    });
+    // ids[0] joga, ids[1] joga, ids[0] chama applyDrawCard → fase DUEL_PASS_PICK
+    engine.applyPlayCards(ids[0], [0]);
+    engine.applyPlayCards(ids[1], [0]);
+    engine.applyDrawCard(ids[0]);
+    // ids[0] tem 1 carta na mão; 999 está fora do range
+    const result = engine.applyDuelPassPick(ids[0], 0, 'insert', 999);
+    expect(result.success).toBe(false);
+    expect(result.reason).toMatch(/insertAtIndex out of range/);
+  });
 });
 
 describe('GameEngine — _setStateForTest helper', () => {
