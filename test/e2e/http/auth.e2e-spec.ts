@@ -1,27 +1,15 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { WsAdapter } from '@nestjs/platform-ws';
+import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { AppModule } from '../src/app.module.js';
-import { PrismaService } from '../src/prisma/prisma.service.js';
+import { createTestApp } from '../helpers/app-factory.js';
+import { resetDb } from '../helpers/db-cleanup.js';
+import { PrismaService } from '../../../src/prisma/prisma.service.js';
 
 describe('Auth (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
 
   beforeAll(async () => {
-    const moduleRef: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleRef.createNestApplication();
-    app.useWebSocketAdapter(new WsAdapter(app));
-    app.useGlobalPipes(
-      new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
-    );
-    app.setGlobalPrefix('api/v1');
-    await app.init();
-
+    app = await createTestApp();
     prisma = app.get(PrismaService);
   });
 
@@ -30,7 +18,7 @@ describe('Auth (e2e)', () => {
   });
 
   beforeEach(async () => {
-    await prisma.user.deleteMany({});
+    await resetDb(prisma);
   });
 
   describe('POST /api/v1/auth/register', () => {
