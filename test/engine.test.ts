@@ -311,6 +311,7 @@ describe('GameEngine — applyPassTurn', () => {
     expect(result.success).toBe(true);
     const roundEndedEv = result.events.find(e => e.type === 'game:round_ended');
     expect(roundEndedEv).toBeDefined();
+    expect(roundEndedEv!.payload.loserIds).toHaveLength(1);
   });
 
   test('passar após jogada funciona e incrementa consecutivePasses', () => {
