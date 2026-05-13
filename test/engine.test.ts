@@ -298,6 +298,73 @@ describe('GameEngine — Sabor', () => {
       expect(true).toBe(true);
     }
   });
+
+  test('Sabor inicia quando jogador joga 2+ cartas mesma categoria', () => {
+    const { engine, ids } = makeEngine('TRADITIONAL', 4);
+    engine.startRound();
+    engine._setStateForTest({
+      hands: { [ids[0]]: [card(5, 'SUSHI', 's1'), card(5, 'SUSHI', 's2'), card(3, 'PIZZA', 'p1')] },
+      pile: [card(2, 'TACO')],
+    });
+    const result = engine.applyPlayCards(ids[0], [0, 1]);
+    expect(result.success).toBe(true);
+    const state = engine.getClientStateFor(ids[0]);
+    expect(state.saborActive).toBe(true);
+    expect(state.saborMinRequired).toBe(2);
+  });
+
+  test('Sabor continua quando próximo jogador joga mais cartas mesma categoria', () => {
+    const { engine, ids } = makeEngine('TRADITIONAL', 4);
+    engine.startRound();
+    engine._setStateForTest({
+      hands: {
+        // ids[0] has extra card so hand isn't empty after playing 2
+        [ids[0]]: [card(5, 'SUSHI', 's1'), card(5, 'SUSHI', 's2'), card(3, 'PIZZA', 'px')],
+        [ids[1]]: [card(6, 'SUSHI', 's3'), card(6, 'SUSHI', 's4'), card(6, 'SUSHI', 's5'), card(3, 'RAMEN', 'rx')],
+      },
+      pile: [card(2, 'TACO')],
+    });
+    engine.applyPlayCards(ids[0], [0, 1]); // inicia Sabor (minRequired=2), hand not empty
+    const r2 = engine.applyPlayCards(ids[1], [0, 1, 2]); // 3 SUSHI continua
+    expect(r2.success).toBe(true);
+    const state = engine.getClientStateFor(ids[1]);
+    expect(state.saborActive).toBe(true);
+    // Após 3 cartas same-cat: isSabor dispara, saborMinRequired atualiza pra 3
+    expect(state.saborMinRequired).toBe(3);
+  });
+
+  test('Sabor quebra com categorias mistas (count >= minRequired)', () => {
+    const { engine, ids } = makeEngine('TRADITIONAL', 4);
+    engine.startRound();
+    engine._setStateForTest({
+      hands: {
+        // ids[0] has extra card so hand isn't empty after playing 2
+        [ids[0]]: [card(5, 'SUSHI', 's1'), card(5, 'SUSHI', 's2'), card(3, 'PIZZA', 'px')],
+        // ids[1] needs extra card too so hand isn't empty after playing 2
+        [ids[1]]: [card(6, 'PIZZA', 'p1'), card(6, 'TACO', 't1'), card(3, 'RAMEN', 'rx')],
+      },
+      pile: [card(2, 'TACO')],
+    });
+    engine.applyPlayCards(ids[0], [0, 1]); // sabor ativo, minRequired=2
+    engine.applyPlayCards(ids[1], [0, 1]); // 2 cartas, categorias mistas, count >= minRequired
+    const state = engine.getClientStateFor(ids[1]);
+    expect(state.saborActive).toBe(false); // quebrou
+  });
+
+  test('Sabor reseta quando rodada termina (jogador esvazia mão)', () => {
+    const { engine, ids } = makeEngine('TRADITIONAL', 2);
+    engine.startRound();
+    engine._setStateForTest({
+      hands: {
+        [ids[0]]: [card(5, 'SUSHI', 's1'), card(5, 'SUSHI', 's2')],
+        [ids[1]]: [card(3, 'PIZZA', 'p1')],
+      },
+      pile: [card(2, 'TACO')],
+    });
+    engine.applyPlayCards(ids[0], [0, 1]); // mão vazia → round ends, startRound resets sabor
+    const state = engine.getClientStateFor(ids[0]);
+    expect(state.saborActive).toBe(false);
+  });
 });
 
 describe('GameEngine — applyPassTurn', () => {
