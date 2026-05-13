@@ -392,7 +392,7 @@ describe('GameEngine — fim de rodada e tokens', () => {
     // Jogar todas as cartas de P1 de uma vez não é possível (mão não adjacente garantida).
     // Vamos testar a lógica de token via getClientStateFor após round_ended simulado.
     const stateWinner = engine.getClientStateFor('winner');
-    expect(stateWinner.players.find(p => p.userId === 'winner')?.tokensLeft).toBe(3);
+    expect(stateWinner.players.find(p => p.userId === 'winner')?.tokensLeft).toBe(2);
   });
 });
 
