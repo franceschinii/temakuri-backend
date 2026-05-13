@@ -644,13 +644,13 @@ describe('GameEngine — Duelo (2 jogadores)', () => {
     engine.startRound();
     engine._setStateForTest({
       hands: {
-        [ids[0]]: [card(5, 'SUSHI'), card(6, 'PIZZA')],
-        [ids[1]]: [card(3, 'RAMEN'), card(4, 'CURRY')],
+        [ids[0]]: [card(2, 'SUSHI', 'h-2-sushi'), card(6, 'PIZZA', 'h-6-pizza')],
+        [ids[1]]: [card(3, 'RAMEN', 'h-3-ramen'), card(4, 'CURRY', 'h-4-curry')],
       },
       pile: [],
       duelPlates: {
-        [ids[0]]: [card(2, 'RAMEN'), card(2, 'BURGER')],
-        [ids[1]]: [card(4, 'CURRY'), card(7, 'DESSERT')],
+        [ids[0]]: [card(2, 'RAMEN', 'p-2-ramen'), card(2, 'BURGER', 'p-2-burger')],
+        [ids[1]]: [card(4, 'CURRY', 'p-4-curry'), card(7, 'DESSERT', 'p-7-dessert')],
       },
     });
     // Player 0 joga 1 carta (isFirstTurn passa a false); hand tem 1 restante
@@ -661,7 +661,6 @@ describe('GameEngine — Duelo (2 jogadores)', () => {
     // Em modo Duelo, isso deve disparar DUEL_PASS_PICK (há pratos disponíveis)
     engine.applyDrawCard(ids[0]);
     const state = engine.getClientStateFor(ids[0]);
-    // O DUEL_PASS_PICK pode aparecer aqui ou já avançou rodada — flexibilizamos
-    expect(['DUEL_PASS_PICK', 'PLAYER_TURN', 'ROUND_END', 'GAME_OVER']).toContain(state.phase);
+    expect(state.phase).toBe('DUEL_PASS_PICK');
   });
 });
