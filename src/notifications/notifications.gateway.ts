@@ -694,22 +694,35 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
       let result: ReturnType<typeof currentEngine.applyPlayCards>;
 
-      if (currentEngine.getPhase() === 'TRICK_PICK') {
-        result = currentEngine.applyTrickPick(currentUserId, 'discard');
-      } else if (currentEngine.getPhase() === 'DUEL_PASS_PICK') {
-        result = currentEngine.applyDuelPassPick(currentUserId, 0, 'discard');
-      } else if (currentEngine.getPhase() === 'PASS_PICK') {
-        // Timer already drew a card for the bot — just insert it
-        const state = currentEngine.getClientStateFor(currentUserId);
-        const insertAt = Math.floor(Math.random() * (state.myHand.length + 1));
-        result = currentEngine.applyInsertDrawn(currentUserId, insertAt);
-      } else {
-        const move = currentEngine.computeBotMove(currentUserId);
-        if (move.action === 'play') {
-          result = currentEngine.applyPlayCards(currentUserId, move.cardIndices);
+      try {
+        if (currentEngine.getPhase() === 'TRICK_PICK') {
+          result = currentEngine.applyTrickPick(currentUserId, 'discard');
+        } else if (currentEngine.getPhase() === 'DUEL_PASS_PICK') {
+          result = currentEngine.applyDuelPassPick(currentUserId, 0, 'discard');
+        } else if (currentEngine.getPhase() === 'PASS_PICK') {
+          // Timer already drew a card for the bot — just insert it
+          const state = currentEngine.getClientStateFor(currentUserId);
+          const insertAt = Math.floor(Math.random() * (state.myHand.length + 1));
+          result = currentEngine.applyInsertDrawn(currentUserId, insertAt);
         } else {
-          result = currentEngine.applyPassTurn(currentUserId, move.insertAtIndex);
+          const move = currentEngine.computeBotMove(currentUserId);
+          if (move.action === 'play') {
+            result = currentEngine.applyPlayCards(currentUserId, move.cardIndices);
+          } else {
+            result = currentEngine.applyPassTurn(currentUserId, move.insertAtIndex);
+          }
         }
+      } catch (err) {
+        // Engine pode lançar (assert integridade em test) — não deixa
+        // derrubar o processo. Loga, força resync no cliente, e tenta
+        // de novo no próximo tick.
+        console.error(`[bot scheduler] engine threw for room ${roomCode}:`, err);
+        try {
+          this.broadcastToRoom(roomCode, 'game:state_sync', {
+            state: currentEngine.getClientStateFor(currentUserId),
+          });
+        } catch {}
+        return;
       }
 
       if (result.success) {

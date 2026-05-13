@@ -814,7 +814,11 @@ export class GameEngine {
 
     if (problems.length > 0) {
       const msg = `[GameEngine] Card integrity broken (room ${this.roomCode}): ${problems.join(', ')}`;
-      if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development') {
+      // Em test queremos throw pra falhar a suite. Em dev/prod só logamos —
+      // throw mata o processo Node inteiro e quebra a sala pra todos. É
+      // melhor degradar continuando com state inconsistente e deixar o
+      // cliente pedir resync via game:request_state.
+      if (process.env.NODE_ENV === 'test') {
         throw new Error(msg);
       }
       console.error(msg);
