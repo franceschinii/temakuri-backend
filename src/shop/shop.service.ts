@@ -53,13 +53,13 @@ export class ShopService {
   }
 
   async purchaseAvatar(userId: string, avatarIndex: number) {
-    if (!AVATAR_PRICES[avatarIndex]) {
-      throw new BadRequestException('Avatar não disponível para compra');
-    }
-
     const inv = await this.getOrCreateInventory(userId);
     if (inv.unlockedAvatars.includes(avatarIndex)) {
       throw new BadRequestException('Avatar já desbloqueado');
+    }
+
+    if (!AVATAR_PRICES[avatarIndex]) {
+      throw new BadRequestException('Avatar não disponível para compra');
     }
 
     const price = AVATAR_PRICES[avatarIndex];
