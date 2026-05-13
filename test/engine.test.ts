@@ -346,6 +346,7 @@ describe('GameEngine — Sabor', () => {
       pile: [card(2, 'TACO')],
     });
     engine.applyPlayCards(ids[0], [0, 1]); // sabor ativo, minRequired=2
+    expect(engine.getClientStateFor(ids[0]).saborActive).toBe(true); // guard
     engine.applyPlayCards(ids[1], [0, 1]); // 2 cartas, categorias mistas, count >= minRequired
     const state = engine.getClientStateFor(ids[1]);
     expect(state.saborActive).toBe(false); // quebrou
