@@ -13,7 +13,9 @@
     "db:studio": "prisma studio",
     "db:seed": "npx tsx prisma/seed.ts",
     "test": "jest --no-coverage",
-    "test:watch": "jest --watch --no-coverage"
+    "test:watch": "jest --watch --no-coverage",
+    "test:e2e": "dotenv -e .env.test -o -- jest --config test/jest-e2e.json --runInBand --forceExit --no-coverage",
+    "test:e2e:watch": "dotenv -e .env.test -o -- jest --config test/jest-e2e.json --runInBand --forceExit --watch --no-coverage"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"
@@ -50,14 +52,18 @@
     "@nestjs/testing": "^11.0.1",
     "@swc/cli": "^0.7.10",
     "@swc/core": "^1.15.11",
+    "@swc/jest": "^0.2.39",
     "@types/bcryptjs": "^2.4.6",
     "@types/express": "^5.0.3",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.15.21",
     "@types/passport-jwt": "^4.0.1",
+    "@types/supertest": "^7.2.0",
     "@types/ws": "^8.18.1",
+    "dotenv-cli": "^11.0.0",
     "jest": "^30.4.1",
     "prisma": "^6.8.2",
+    "supertest": "^7.2.2",
     "ts-jest": "^29.4.9",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",

@@ -87,6 +87,39 @@ export class GameEngine {
     this.tricksWon[userId] = 0;
   }
 
+  /**
+   * @internal — testing only.
+   * Substitui partes do estado interno do engine para cenários determinísticos
+   * em testes unitários. Não use em código de produção.
+   */
+  _setStateForTest(state: {
+    hands?: Record<string, Card[]>;
+    deck?: Card[];
+    pile?: Card[];
+    duelPlates?: Record<string, Card[]>;
+    tokens?: Record<string, number>;
+  }): void {
+    if (state.hands) {
+      for (const [userId, hand] of Object.entries(state.hands)) {
+        const player = this.players.find(p => p.userId === userId);
+        if (player) player.hand = [...hand];
+      }
+    }
+    if (state.deck !== undefined) this.drawPile = [...state.deck];
+    if (state.pile !== undefined) this.pile = [...state.pile];
+    if (state.duelPlates) {
+      for (const [userId, plates] of Object.entries(state.duelPlates)) {
+        this.duelPlates.set(userId, [...plates]);
+      }
+    }
+    if (state.tokens) {
+      for (const [userId, n] of Object.entries(state.tokens)) {
+        const player = this.players.find(p => p.userId === userId);
+        if (player) player.tokensLeft = n;
+      }
+    }
+  }
+
   hasPlayer(userId: string): boolean {
     return this.players.some(p => p.userId === userId);
   }
@@ -110,9 +143,15 @@ export class GameEngine {
     this.phase = 'DEALING';
 
     const activePlayers = this.activePlayers();
-    const { hands, drawPile } = dealCards(activePlayers.map(p => p.userId), this.handBias);
-    activePlayers.forEach(p => { p.hand = hands.get(p.userId) ?? []; });
-    this.drawPile = drawPile;
+
+    // Em RODIZIO, a partir da 2ª rodada as mãos já foram rotacionadas por
+    // rotateHands() em resolveRoundEnd — não redistribuímos o baralho para
+    // preservar o efeito da rotação.
+    if (!(this.mode === 'RODIZIO' && this.round > 1)) {
+      const { hands, drawPile } = dealCards(activePlayers.map(p => p.userId), this.handBias);
+      activePlayers.forEach(p => { p.hand = hands.get(p.userId) ?? []; });
+      this.drawPile = drawPile;
+    }
 
     if (this.mode === 'MERCADO') {
       this.market = this.drawPile.splice(0, MARKET_SIZE);
@@ -264,12 +303,16 @@ export class GameEngine {
     this.pendingDraws.delete(userId); // defensive: discard any stale pending draw
 
     const player = this.findPlayer(userId)!;
+
+    if (insertAtIndex < 0 || insertAtIndex > player.hand.length) {
+      return this.fail('insertAtIndex out of range');
+    }
+
     // Draw from the finite deck (monte) — null if exhausted
     const drawnCard = this.drawPile.length > 0 ? this.drawPile.shift()! : null;
 
     if (drawnCard) {
-      const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
-      player.hand.splice(clampedInsert, 0, drawnCard);
+      player.hand.splice(insertAtIndex, 0, drawnCard);
     }
 
     this.consecutivePasses++;
@@ -354,6 +397,14 @@ export class GameEngine {
     if (plateIndex < 0 || plateIndex >= plates.length) return this.fail('Invalid plate index');
 
     const pickedPlate = plates[plateIndex];
+
+    if (action === 'insert') {
+      const player = this.findPlayer(userId)!;
+      if (insertAtIndex < 0 || insertAtIndex > player.hand.length) {
+        return this.fail('insertAtIndex out of range');
+      }
+    }
+
     const remainingPlates = plates.filter((_, i) => i !== plateIndex);
     this.duelPlates.set(userId, remainingPlates);
     this.pendingDuelPick = null;
@@ -363,8 +414,7 @@ export class GameEngine {
     const events: EngineEvent[] = [];
 
     if (action === 'insert') {
-      const clamped = Math.max(0, Math.min(insertAtIndex, player.hand.length));
-      player.hand.splice(clamped, 0, pickedPlate);
+      player.hand.splice(insertAtIndex, 0, pickedPlate);
       events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
     } else {
       this.discardPile.push(pickedPlate);
@@ -421,6 +471,14 @@ export class GameEngine {
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
 
     const drawnCard = this.pendingDraws.get(userId) ?? null;
+
+    if (action === 'insert' && drawnCard) {
+      const player = this.findPlayer(userId)!;
+      if (insertAtIndex < 0 || insertAtIndex > player.hand.length) {
+        return this.fail('insertAtIndex out of range');
+      }
+    }
+
     this.pendingDraws.delete(userId);
     this.phase = 'PLAYER_TURN';
 
@@ -428,8 +486,7 @@ export class GameEngine {
     let cardAddedToHand = false;
 
     if (action === 'insert' && drawnCard) {
-      const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
-      player.hand.splice(clampedInsert, 0, drawnCard);
+      player.hand.splice(insertAtIndex, 0, drawnCard);
       cardAddedToHand = true;
     }
     // 'discard': drawnCard vai para o descarte
@@ -568,8 +625,10 @@ export class GameEngine {
     const resolvedCards = [...this.trickPileForPick];
 
     if (action === 'take') {
-      const clamped = Math.max(0, Math.min(insertAtIndex, player.hand.length));
-      player.hand.splice(clamped, 0, ...resolvedCards);
+      if (insertAtIndex < 0 || insertAtIndex > player.hand.length) {
+        return this.fail('insertAtIndex out of range');
+      }
+      player.hand.splice(insertAtIndex, 0, ...resolvedCards);
       events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
     } else {
       // Discard: add trick pile to server-side discard pile
@@ -606,6 +665,7 @@ export class GameEngine {
     }];
 
     if (winner && winner.tokensLeft === 0) {
+      winner.isEliminated = true;
       return [...events, ...this.resolveGameOver(winnerId)];
     }
 

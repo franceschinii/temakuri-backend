@@ -5,6 +5,7 @@ import { CreateRoomDto } from './dto/room.dto.js';
 import { customAlphabet } from 'nanoid';
 import { xpGain, coinsGain, computeLevel } from '../common/xp.utils.js';
 import { calcPdsChange, clampPds, rankFromPds } from '../common/pds.utils.js';
+import { Prisma } from '@prisma/client';
 
 const generateCode = customAlphabet('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', 6);
 
@@ -280,17 +281,31 @@ export class RoomsService {
       'Taiyaki-bucho',   // chefe taiyaki
       'Yakiniku-osho',   // rei do churrasco japonês
     ];
-    const allBotUsernames = await this.prisma.user.findMany({
-      where: { isBot: true },
-      select: { username: true },
-    });
-    const usedBotNames = new Set(allBotUsernames.map(b => b.username));
-    const availableBase = botBaseNames.find(n => !usedBotNames.has(n));
-    const username = availableBase ?? `Bot-${Date.now().toString(36).slice(-5).toUpperCase()}`;
 
-    const bot = await this.prisma.user.create({
-      data: { username, isBot: true, isGuest: true },
-    });
+    // Retry loop handles concurrent addBot calls racing on the same name (P2002).
+    // Each attempt re-reads used names so a concurrent winner is reflected.
+    let bot: { id: string; username: string };
+    for (let attempt = 0; ; attempt++) {
+      const allBotUsernames = await this.prisma.user.findMany({
+        where: { isBot: true },
+        select: { username: true },
+      });
+      const usedBotNames = new Set(allBotUsernames.map(b => b.username));
+      const availableBase = botBaseNames.find(n => !usedBotNames.has(n));
+      const username = availableBase ?? `Bot-${Date.now().toString(36).slice(-5).toUpperCase()}-${attempt}`;
+
+      try {
+        bot = await this.prisma.user.create({
+          data: { username, isBot: true, isGuest: true },
+        });
+        break;
+      } catch (err) {
+        const isUniqueViolation =
+          err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
+        if (!isUniqueViolation || attempt >= 9) throw err;
+        // Another concurrent request claimed this name — retry with fresh name list.
+      }
+    }
 
     // First available seat (handles gaps left by departed players)
     const usedSeats = new Set(room.players.map(p => p.seat));
