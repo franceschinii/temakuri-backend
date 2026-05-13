@@ -235,6 +235,43 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.broadcastToRoom(data.roomCode, 'lobby:room_updated', { room: updatedRoom });
   }
 
+  /**
+   * Jogador recusou o match no dialog de matchmaking.
+   * Cancela imediatamente o match em formacao e devolve os demais a fila.
+   */
+  @SubscribeMessage('matchmaking:decline')
+  async handleMatchmakingDecline(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string }) {
+    if (!client.userId) return;
+    const pending = this.pendingMatches.get(data.roomCode);
+    if (!pending) return;
+
+    // Verifica se o user esta neste match
+    const isInMatch = pending.players.some(p => p.userId === client.userId);
+    if (!isInMatch) return;
+
+    if (pending.confirmTimer) clearTimeout(pending.confirmTimer);
+    this.pendingMatches.delete(data.roomCode);
+    this.matchmakingRooms.delete(data.roomCode);
+    this.roomReadyMap.delete(data.roomCode);
+
+    // Notifica todos no match
+    for (const player of pending.players) {
+      this.sendToUser(player.userId, 'matchmaking:cancelled', {
+        reason: player.userId === client.userId
+          ? 'Você recusou o match.'
+          : 'Um jogador recusou. Voltando para a fila.',
+      });
+    }
+    this.roomSockets.delete(data.roomCode);
+    this.roomsService.leaveRoom(pending.players[0]?.userId ?? '', data.roomCode).catch(() => {});
+
+    // Devolve os que NAO recusaram a fila
+    const survivors = pending.players.filter(p => p.userId !== client.userId);
+    if (survivors.length > 0) {
+      this.events.emit('matchmaking.requeue', { players: survivors });
+    }
+  }
+
   @SubscribeMessage('lobby:leave_room')
   async handleLeaveRoom(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string }) {
     if (!client.userId) return;
@@ -663,7 +700,6 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   @OnEvent('matchmaking.found')
   async handleMatchmakingFound(payload: { roomCode: string; players: QueueEntry[]; createdByUserId: string; isRanked?: boolean }) {
     const { roomCode, players } = payload;
-    const CONFIRM_TIMEOUT_MS = 120_000;
 
     if (!this.roomReadyMap.has(roomCode)) {
       this.roomReadyMap.set(roomCode, new Set());
@@ -674,6 +710,9 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     // Detecta se a sala criada e ranqueada (verificacao definitiva via DB)
     const roomRecord = await this.roomsService.findByCode(roomCode).catch(() => null);
     const isRanked = roomRecord?.isRanked === true;
+
+    // QUICK: 20s para aceitar (modelo LoL). RANKED: mantem 120s para nao penalizar.
+    const CONFIRM_TIMEOUT_MS = isRanked ? 120_000 : 20_000;
 
     for (const player of players) {
       try {
@@ -739,6 +778,41 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (pending.isRanked && humanPlayers.length < 4) {
       this.cancelRankedMatch(roomCode, pending.players, humanPlayers.map((p: any) => p.userId));
       return;
+    }
+
+    // QUICK: exige minimo 2 humanos CONFIRMADOS (ready=true). Quem nao confirmou e removido.
+    if (!pending.isRanked) {
+      const readySet = this.roomReadyMap.get(roomCode) ?? new Set<string>();
+      const confirmedHumans = humanPlayers.filter((p: any) => readySet.has(p.userId));
+
+      if (confirmedHumans.length < 2) {
+        // Menos de 2 confirmados — cancela match. Confirmados voltam a fila.
+        const confirmedIds = confirmedHumans.map((p: any) => p.userId);
+        const survivors = pending.players.filter(p => confirmedIds.includes(p.userId));
+        this.matchmakingRooms.delete(roomCode);
+        this.roomReadyMap.delete(roomCode);
+        // Notifica todos que estavam no match
+        for (const player of pending.players) {
+          this.sendToUser(player.userId, 'matchmaking:cancelled', {
+            reason: confirmedIds.includes(player.userId)
+              ? 'Poucos jogadores confirmaram. Voltando para a fila.'
+              : 'Match cancelado.',
+          });
+        }
+        this.roomSockets.delete(roomCode);
+        this.roomsService.leaveRoom(pending.players[0]?.userId ?? '', roomCode).catch(() => {});
+        if (survivors.length > 0) {
+          this.events.emit('matchmaking.requeue', { players: survivors });
+        }
+        return;
+      }
+
+      // 2+ confirmaram: remove humanos nao-confirmados da sala (eles perdem o slot)
+      const notConfirmed = humanPlayers.filter((p: any) => !readySet.has(p.userId));
+      for (const p of notConfirmed) {
+        await this.roomsService.leaveRoom(p.userId, roomCode).catch(() => {});
+        this.sendToUser(p.userId, 'matchmaking:cancelled', { reason: 'Você não confirmou a tempo.' });
+      }
     }
 
     this.broadcastToRoom(roomCode, 'lobby:game_starting', { countdown: STARTING_COUNTDOWN_MS });
