@@ -115,26 +115,36 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       } else {
         // Room in WAITING: remove guest immediately (they only exist while connected)
         const disconnectedRoomCode = client.roomCode;
-        this.roomsService.leaveRoomIfGuest(client.userId, disconnectedRoomCode).then(async removed => {
-          if (removed) {
-            // Verifica se sala de matchmaking ficou sem humanos após a saída do guest
+        const disconnectedUserId = client.userId;
+        this.roomsService.leaveRoomIfGuest(disconnectedUserId, disconnectedRoomCode).then(async removed => {
+          // After guest removal (or registered user disconnect), check if room should close
+          const room = await this.roomsService.findByCode(disconnectedRoomCode!).catch(() => null);
+          if (!room || room.status !== 'WAITING') {
             if (this.matchmakingRooms.has(disconnectedRoomCode!)) {
-              const room = await this.roomsService.findByCode(disconnectedRoomCode!).catch(() => null);
-              if (!room || room.status !== 'WAITING') {
-                this.matchmakingRooms.delete(disconnectedRoomCode!);
-              } else {
-                const humanPlayers = room.players.filter((p: any) => !p.isBot);
-                if (humanPlayers.length === 0) {
-                  await this.roomsService.leaveRoom(room.hostId, disconnectedRoomCode!).catch(() => {});
-                  this.roomReadyMap.delete(disconnectedRoomCode!);
-                  this.matchmakingRooms.delete(disconnectedRoomCode!);
-                  this.roomSockets.delete(disconnectedRoomCode!);
-                  return;
-                }
-              }
+              this.matchmakingRooms.delete(disconnectedRoomCode!);
             }
-            this.roomsService.findByCode(disconnectedRoomCode!).then(room => {
-              this.broadcastToRoom(disconnectedRoomCode!, 'lobby:room_updated', { room });
+            return;
+          }
+
+          // Count humans still connected (has at least one active socket)
+          const humanPlayers = room.players.filter((p: any) => !p.isBot);
+          const connectedHumans = humanPlayers.filter((p: any) => {
+            const sockets = this.userSockets.get(p.userId);
+            return sockets && sockets.size > 0;
+          });
+
+          if (connectedHumans.length === 0) {
+            // No humans left — close the room
+            await this.roomsService.leaveRoom(room.hostId, disconnectedRoomCode!).catch(() => {});
+            this.roomReadyMap.delete(disconnectedRoomCode!);
+            this.matchmakingRooms.delete(disconnectedRoomCode!);
+            this.roomSockets.delete(disconnectedRoomCode!);
+            return;
+          }
+
+          if (removed) {
+            this.roomsService.findByCode(disconnectedRoomCode!).then(updated => {
+              this.broadcastToRoom(disconnectedRoomCode!, 'lobby:room_updated', { room: updated });
             }).catch(() => {});
           }
         }).catch(() => {});
