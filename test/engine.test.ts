@@ -572,9 +572,6 @@ describe('GameEngine — modo RODIZIO', () => {
   });
 
   test('fim de rodada em RODIZIO incrementa round e emite round_ended', () => {
-    // Nota: o engine chama rotateHands() em resolveRoundEnd, mas o startRound()
-    // que vem em seguida re-distribui o baralho, então a rotação não tem
-    // efeito observável. Este teste cobre apenas o fluxo de fim de rodada.
     // Com 4 jogadores RODIZIO: disparar fim de rodada via mão vazia (p1 joga última carta).
     // rotateHands() é chamado dentro de resolveRoundEnd → startRound incrementa round.
     const { engine, ids } = makeEngine('RODIZIO', 4);
@@ -582,19 +579,28 @@ describe('GameEngine — modo RODIZIO', () => {
 
     const roundBefore = engine.getClientStateFor(ids[0]).round;
 
+    // Registrar as mãos antes da rotação (após startRound inicial)
+    const handsBefore = ids.map(id => engine.getClientStateFor(id).myHand.map(c => c.id));
+
     // Dar a p1 (seat 0, sempre primeiro a jogar) exatamente 1 carta; deck vazio para
     // não desenhar; os demais com mão vazia (não interfere no turno atual).
     engine._setStateForTest({
       deck: [],
       hands: {
         [ids[0]]: [card(3, 'SUSHI', 'test-3s')],
-        [ids[1]]: [],
-        [ids[2]]: [],
-        [ids[3]]: [],
+        [ids[1]]: [card(1, 'PIZZA', 'p2-a'), card(2, 'PIZZA', 'p2-b')],
+        [ids[2]]: [card(4, 'TACO', 'p3-a'), card(5, 'TACO', 'p3-b')],
+        [ids[3]]: [card(6, 'CURRY', 'p4-a'), card(7, 'CURRY', 'p4-b')],
       },
     });
 
-    // p1 joga a única carta → mão vazia → resolveRoundEnd → rotateHands → startRound
+    const handsSet = {
+      [ids[1]]: engine.getClientStateFor(ids[1]).myHand.map(c => c.id),
+      [ids[2]]: engine.getClientStateFor(ids[2]).myHand.map(c => c.id),
+      [ids[3]]: engine.getClientStateFor(ids[3]).myHand.map(c => c.id),
+    };
+
+    // p1 joga a única carta → mão vazia → resolveRoundEnd → rotateHands → startRound (sem re-deal)
     const result = engine.applyPlayCards(ids[0], [0]);
     expect(result.success).toBe(true);
 
@@ -605,6 +611,53 @@ describe('GameEngine — modo RODIZIO', () => {
     // O evento round_ended deve ter sido emitido
     const roundEndedEv = result.events.find(e => e.type === 'game:round_ended');
     expect(roundEndedEv).toBeDefined();
+
+    // Após a rotação, as mãos de ids[1..3] devem ter chegado a novos donos
+    // (rotateHands faz left-shift: p[i].hand = p[i+1].hand, último recebe o primeiro)
+    const p1HandAfter = engine.getClientStateFor(ids[1]).myHand.map(c => c.id);
+    const p2HandAfter = engine.getClientStateFor(ids[2]).myHand.map(c => c.id);
+    const p3HandAfter = engine.getClientStateFor(ids[3]).myHand.map(c => c.id);
+    // ids[1] deve ter recebido a mão que era de ids[2]
+    expect(p1HandAfter).toEqual(handsSet[ids[2]]);
+    // ids[2] deve ter recebido a mão que era de ids[3]
+    expect(p2HandAfter).toEqual(handsSet[ids[3]]);
+  });
+
+  test('em RODIZIO, mãos rotacionam entre jogadores ao iniciar próxima rodada', () => {
+    const { engine, ids } = makeEngine('RODIZIO', 4);
+    engine.startRound();
+
+    // Substituir mãos com IDs distintos para rastrear a rotação
+    engine._setStateForTest({
+      deck: [],
+      hands: {
+        [ids[0]]: [card(1, 'SUSHI', 'p0-card-a')],
+        [ids[1]]: [card(3, 'PIZZA', 'p1-card-a'), card(4, 'PIZZA', 'p1-card-b')],
+        [ids[2]]: [card(5, 'TACO', 'p2-card-a'), card(6, 'TACO', 'p2-card-b')],
+        [ids[3]]: [card(7, 'CURRY', 'p3-card-a'), card(7, 'CURRY', 'p3-card-b')],
+      },
+    });
+
+    // Captura snapshot das mãos de ids[1..3] antes da rotação
+    const handP1Before = engine.getClientStateFor(ids[1]).myHand.map(c => c.id);
+    const handP2Before = engine.getClientStateFor(ids[2]).myHand.map(c => c.id);
+    const handP3Before = engine.getClientStateFor(ids[3]).myHand.map(c => c.id);
+
+    // ids[0] tem 1 carta → joga → mão vazia → fim de rodada → rotateHands → startRound sem re-deal
+    const result = engine.applyPlayCards(ids[0], [0]);
+    expect(result.success).toBe(true);
+
+    // rotateHands: left-shift — p[i].hand = p[i+1].hand, último recebe o primeiro (vazio após play)
+    const handP1After = engine.getClientStateFor(ids[1]).myHand.map(c => c.id);
+    const handP2After = engine.getClientStateFor(ids[2]).myHand.map(c => c.id);
+    const handP3After = engine.getClientStateFor(ids[3]).myHand.map(c => c.id);
+
+    // ids[1] deve ter recebido a mão que era de ids[2] (left-shift)
+    expect(handP1After).toEqual(handP2Before);
+    // ids[2] deve ter recebido a mão que era de ids[3]
+    expect(handP2After).toEqual(handP3Before);
+    // ids[3] deve ter recebido a mão que era de ids[0] (que estava vazia após a jogada)
+    expect(handP3After).toEqual([]);
   });
 
   test('3 rodadas consecutivas executam sem erro em RODIZIO', () => {

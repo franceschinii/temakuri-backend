@@ -141,9 +141,15 @@ export class GameEngine {
     this.phase = 'DEALING';
 
     const activePlayers = this.activePlayers();
-    const { hands, drawPile } = dealCards(activePlayers.map(p => p.userId), this.handBias);
-    activePlayers.forEach(p => { p.hand = hands.get(p.userId) ?? []; });
-    this.drawPile = drawPile;
+
+    // Em RODIZIO, a partir da 2ª rodada as mãos já foram rotacionadas por
+    // rotateHands() em resolveRoundEnd — não redistribuímos o baralho para
+    // preservar o efeito da rotação.
+    if (!(this.mode === 'RODIZIO' && this.round > 1)) {
+      const { hands, drawPile } = dealCards(activePlayers.map(p => p.userId), this.handBias);
+      activePlayers.forEach(p => { p.hand = hands.get(p.userId) ?? []; });
+      this.drawPile = drawPile;
+    }
 
     if (this.mode === 'MERCADO') {
       this.market = this.drawPile.splice(0, MARKET_SIZE);
