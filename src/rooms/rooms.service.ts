@@ -162,8 +162,6 @@ export class RoomsService {
 
     if (room.status === 'IN_PROGRESS') {
       // Entra como espectador — aguarda próxima rodada (reset da sala)
-      const activePlayers = room.players.filter(rp => rp.status !== 'SPECTATOR');
-      if (activePlayers.length >= room.maxPlayers) throw new BadRequestException('Sala cheia');
       const usedSeats = new Set(room.players.map(p => p.seat));
       let seat = 0;
       while (usedSeats.has(seat)) seat++;
@@ -174,7 +172,17 @@ export class RoomsService {
     }
 
     if (room.status !== 'WAITING') throw new BadRequestException('Room already started');
-    if (room.players.length >= room.maxPlayers) throw new BadRequestException('Room is full');
+
+    // Sala WAITING lotada: entra como espectador aguardando vaga
+    if (room.players.length >= room.maxPlayers) {
+      const usedSeats = new Set(room.players.map(p => p.seat));
+      let seat = 0;
+      while (usedSeats.has(seat)) seat++;
+      await this.prisma.roomPlayer.create({
+        data: { roomId: room.id, userId, seat, status: 'SPECTATOR' },
+      });
+      return this.findByCode(code);
+    }
 
     const usedSeats = new Set(room.players.map(p => p.seat));
     let seat = 0;
@@ -231,6 +239,21 @@ export class RoomsService {
         await this.prisma.room.delete({ where: { id: room.id } });
         if (!room.isPrivate) this.events.emit('rooms.public.changed');
         return;
+      }
+
+      // Sala WAITING: promove o primeiro espectador aguardando para jogador ativo
+      if (room.status === 'WAITING') {
+        const activePlayers = room.players.filter(p => p.userId !== userId && p.status !== 'SPECTATOR');
+        if (activePlayers.length < room.maxPlayers) {
+          const spectator = room.players.find(p => p.userId !== userId && p.status === 'SPECTATOR');
+          if (spectator) {
+            await this.prisma.roomPlayer.update({
+              where: { id: spectator.id },
+              data: { status: 'CONNECTED' },
+            });
+            this.events.emit('rooms.spectator_promoted', { roomCode: room.code, userId: spectator.userId });
+          }
+        }
       }
     }
 

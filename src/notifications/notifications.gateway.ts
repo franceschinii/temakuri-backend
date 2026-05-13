@@ -689,6 +689,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     // This event exists for future cross-module listeners.
   }
 
+  @OnEvent('rooms.spectator_promoted')
+  async handleSpectatorPromoted({ roomCode, userId }: { roomCode: string; userId: string }) {
+    this.sendToUser(userId, 'lobby:promoted_to_player', { roomCode });
+    const room = await this.roomsService.findByCode(roomCode).catch(() => null);
+    if (room) this.broadcastToRoom(roomCode, 'lobby:room_updated', { room });
+  }
+
   @OnEvent('rooms.lobby.changed')
   broadcastLobbyRoomChanged({ roomCode, room }: { roomCode: string; room: unknown }) {
     this.broadcastToRoom(roomCode, 'lobby:room_updated', { room });
