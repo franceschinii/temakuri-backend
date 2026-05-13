@@ -917,3 +917,53 @@ describe('GameEngine — tokens e eliminação', () => {
     expect(gameOverEvent).toBeDefined();
   });
 });
+
+// ─── GAME_OVER state shape ────────────────────────────────────────────────────
+
+describe('GameEngine — GAME_OVER state', () => {
+  test('GAME_OVER emite evento game:game_over com 4 rankings (placements 1-4 únicos)', () => {
+    const { engine, ids } = makeEngine('TRADITIONAL', 4);
+    engine.startRound();
+    // Força ids[1] a esgotar tokens (1→0) ao esvaziar mão
+    engine._setStateForTest({
+      tokens: { [ids[0]]: 2, [ids[1]]: 1, [ids[2]]: 2, [ids[3]]: 2 },
+      hands: {
+        [ids[0]]: [card(2, 'PIZZA', 'p1'), card(3, 'SUSHI', 's1')],
+        [ids[1]]: [card(5, 'SUSHI', 's2')],
+        [ids[2]]: [card(3, 'TACO', 't1'), card(4, 'TACO', 't2')],
+        [ids[3]]: [card(3, 'CURRY', 'c1'), card(4, 'CURRY', 'c2')],
+      },
+    });
+    engine.applyPlayCards(ids[0], [0]);
+    const result = engine.applyPlayCards(ids[1], [0]); // ids[1] esvazia mão → tokens=0 → GAME_OVER
+    const gameOverEvent = result.events.find(e => e.type === 'game:game_over');
+    expect(gameOverEvent).toBeDefined();
+    const rankings = gameOverEvent!.payload.rankings as Array<{ userId: string; placement: number; tokensLeft: number; username: string }>;
+    expect(rankings).toHaveLength(4);
+    expect(rankings.map(r => r.placement).sort()).toEqual([1, 2, 3, 4]);
+    expect(rankings[0].placement).toBe(1);
+  });
+
+  test('vencedor (placement 1) tem tokensLeft <= último (placement 4)', () => {
+    // O vencedor é quem esgotou os tokens primeiro (ganhou mais rodadas, recebeu mais pratos).
+    // placement 1 → tokensLeft = 0; placement 4 → mais tokens restantes.
+    const { engine, ids } = makeEngine('TRADITIONAL', 4);
+    engine.startRound();
+    engine._setStateForTest({
+      tokens: { [ids[0]]: 2, [ids[1]]: 1, [ids[2]]: 2, [ids[3]]: 2 },
+      hands: {
+        [ids[0]]: [card(2, 'PIZZA', 'p1'), card(3, 'SUSHI', 's1')],
+        [ids[1]]: [card(5, 'SUSHI', 's2')],
+        [ids[2]]: [card(3, 'TACO', 't1'), card(4, 'TACO', 't2')],
+        [ids[3]]: [card(3, 'CURRY', 'c1'), card(4, 'CURRY', 'c2')],
+      },
+    });
+    engine.applyPlayCards(ids[0], [0]);
+    const result = engine.applyPlayCards(ids[1], [0]);
+    const gameOverEvent = result.events.find(e => e.type === 'game:game_over')!;
+    const rankings = gameOverEvent.payload.rankings as Array<{ placement: number; tokensLeft: number }>;
+    const first = rankings.find(r => r.placement === 1)!;
+    const last = rankings.find(r => r.placement === 4)!;
+    expect(first.tokensLeft).toBeLessThanOrEqual(last.tokensLeft);
+  });
+});
