@@ -924,7 +924,8 @@ describe('GameEngine — _setStateForTest helper', () => {
   });
 
   test('injeta deck pequeno', () => {
-    const { engine, ids } = makeEngine('TRADITIONAL', 2);
+    // 4 jogadores porque 2P (Duelo) oculta drawPileCount no client state (fix 16a81ec)
+    const { engine, ids } = makeEngine('TRADITIONAL', 4);
     engine.startRound();
     engine._setStateForTest({ deck: [card(1, 'SUSHI'), card(2, 'RAMEN')] });
     const state = engine.getClientStateFor(ids[0]);
