@@ -71,7 +71,7 @@ export class GameEngine {
     this.initialTokens = initialTokens;
   }
 
-  addPlayer(userId: string, username: string, avatarIndex: number, seat: number, meta?: { isBot?: boolean; isAdmin?: boolean; level?: number; pds?: number; sessionWins?: number }) {
+  addPlayer(userId: string, username: string, avatarIndex: number, seat: number, meta?: { isBot?: boolean; isGuest?: boolean; isAdmin?: boolean; level?: number; pds?: number; sessionWins?: number }) {
     this.players.push({
       userId,
       username,
