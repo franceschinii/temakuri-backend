@@ -301,12 +301,16 @@ describe('GameEngine — Sabor', () => {
 });
 
 describe('GameEngine — applyPassTurn', () => {
-  test('passar sem pilha é rejeitado', () => {
-    const { engine, ids } = makeEngine();
+  test('passar sem pilha (empasse) resolve o round imediatamente', () => {
+    // Com 2 jogadores, 1 pass = todos passaram sem ninguém jogar nada.
+    // O engine resolve como "empasse": quem tem mais cartas na mão perde.
+    // Não é um erro — o pass é aceito e o round termina.
+    const { engine, ids } = makeEngine('TRADITIONAL', 2);
     engine.startRound();
     const result = engine.applyPassTurn(ids[0], 0);
-    expect(result.success).toBe(false);
-    expect(result.reason).toMatch(/No pile/);
+    expect(result.success).toBe(true);
+    const roundEndedEv = result.events.find(e => e.type === 'game:round_ended');
+    expect(roundEndedEv).toBeDefined();
   });
 
   test('passar após jogada funciona e incrementa consecutivePasses', () => {
