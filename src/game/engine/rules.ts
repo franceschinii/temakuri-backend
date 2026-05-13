@@ -59,9 +59,17 @@ export function validatePlayIndices(
   pile: Card[],
   saborActive: boolean,
   saborMinRequired: number,
+  plateCards?: Card[],
 ): { valid: boolean; reason?: string } {
-  if (indices.length === 0) {
+  const hasPlates = plateCards && plateCards.length > 0;
+
+  if (indices.length === 0 && !hasPlates) {
     return { valid: false, reason: 'Must play at least one card' };
+  }
+
+  // Pratos só podem ser usados em combinação com cartas da mão — nunca sozinhos
+  if (indices.length === 0 && hasPlates) {
+    return { valid: false, reason: 'Plate cards must be combined with at least one hand card' };
   }
 
   if (indices.some(i => i < 0 || i >= hand.length)) {
@@ -72,11 +80,12 @@ export function validatePlayIndices(
     return { valid: false, reason: 'Selected cards must be adjacent in hand' };
   }
 
-  const selected = indices.sort((a, b) => a - b).map(i => hand[i]);
+  const handCards = [...indices].sort((a, b) => a - b).map(i => hand[i]);
+  const allCards = hasPlates ? [...handCards, ...plateCards] : handCards;
 
-  if (!isSameValue(selected)) {
+  if (!isSameValue(allCards)) {
     return { valid: false, reason: 'All selected cards must have the same value' };
   }
 
-  return beatsPlay(selected, pile, saborActive, saborMinRequired);
+  return beatsPlay(allCards, pile, saborActive, saborMinRequired);
 }

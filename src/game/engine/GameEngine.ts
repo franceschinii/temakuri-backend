@@ -171,24 +171,47 @@ export class GameEngine {
     return events;
   }
 
-  applyPlayCards(userId: string, cardIndices: number[]): EngineResult {
+  applyPlayCards(userId: string, cardIndices: number[], plateIndices?: number[]): EngineResult {
     if (this.phase !== 'PLAYER_TURN') return this.fail('Not the right phase');
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
 
     const player = this.findPlayer(userId)!;
+
+    // Resolve plate cards being combined with this play (Duelo only)
+    let selectedPlateCards: Card[] | undefined;
+    if (plateIndices && plateIndices.length > 0) {
+      if (!this.isDuel()) return this.fail('Plate combination only available in Duel mode');
+      const plates = this.duelPlates.get(userId) ?? [];
+      if (plateIndices.some(i => i < 0 || i >= plates.length)) return this.fail('Invalid plate index');
+      selectedPlateCards = plateIndices.map(i => plates[i]);
+    }
+
     const validation = validatePlayIndices(
       player.hand,
       cardIndices,
       this.pile,
       this.saborActive,
       this.saborMinRequired,
+      selectedPlateCards,
     );
 
     if (!validation.valid) return this.fail(validation.reason!);
 
+    // Remove hand cards
     const sorted = [...cardIndices].sort((a, b) => a - b);
-    const playedCards = sorted.map(i => player.hand[i]);
+    const handPlayedCards = sorted.map(i => player.hand[i]);
     player.hand = player.hand.filter((_, i) => !sorted.includes(i));
+
+    // Remove plates used in this play
+    if (selectedPlateCards && plateIndices && plateIndices.length > 0) {
+      const currentPlates = this.duelPlates.get(userId) ?? [];
+      const remainingPlates = currentPlates.filter((_, i) => !plateIndices.includes(i));
+      this.duelPlates.set(userId, remainingPlates);
+    }
+
+    const playedCards = selectedPlateCards
+      ? [...handPlayedCards, ...selectedPlateCards]
+      : handPlayedCards;
 
     const saborTriggered = isSabor(playedCards);
     this.pile = playedCards;
@@ -209,7 +232,17 @@ export class GameEngine {
       events.push({ type: 'game:sabor_broken', payload: { brokenBy: userId } });
     }
 
-    events.push({ type: 'game:cards_played', payload: { userId, cards: playedCards, isSabor: saborTriggered } });
+    const usedPlates = selectedPlateCards && selectedPlateCards.length > 0;
+    events.push({
+      type: 'game:cards_played',
+      payload: {
+        userId,
+        cards: playedCards,
+        isSabor: saborTriggered,
+        usedPlates: usedPlates ? selectedPlateCards : undefined,
+        remainingPlates: usedPlates ? (this.duelPlates.get(userId) ?? []) : undefined,
+      },
+    });
     events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
 
     if (player.hand.length === 0) {

@@ -364,13 +364,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   @SubscribeMessage('game:play_cards')
-  handlePlayCards(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; cardIndices: number[] }) {
+  handlePlayCards(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; cardIndices: number[]; plateIndices?: number[] }) {
     if (!client.userId) return;
 
     const engine = this.roomManager.get(data.roomCode);
     if (!engine) return this.sendToClient(client, 'game:error', { code: 'ROOM_NOT_FOUND', message: 'Game not found' });
 
-    const result = engine.applyPlayCards(client.userId, data.cardIndices);
+    const result = engine.applyPlayCards(client.userId, data.cardIndices, data.plateIndices);
     if (!result.success) {
       return this.sendToClient(client, 'game:error', { code: 'INVALID_PLAY', message: result.reason });
     }
