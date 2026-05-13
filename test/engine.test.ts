@@ -130,11 +130,11 @@ describe('rules — beatsPlay', () => {
   });
 
   describe('Sabor ativo', () => {
-    test('deve jogar MAIS que minRequired para superar', () => {
+    test('jogar exatamente minRequired com mesma categoria + valor maior vence', () => {
       const pile = [card(3, 'PIZZA'), card(3, 'PIZZA')];
-      // Sabor ativo com minRequired=2, joga 2 da mesma categoria — NÃO supera (precisa >2)
       const played = [card(5, 'SUSHI'), card(5, 'SUSHI')];
-      expect(beatsPlay(played, pile, true, 2).valid).toBe(false);
+      // minRequired=2; played.length=2 atende, e valor 5 > 3 → válido
+      expect(beatsPlay(played, pile, true, 2).valid).toBe(true);
     });
 
     test('jogar 3 quando minRequired=2 passa', () => {
