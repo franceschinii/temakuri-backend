@@ -341,19 +341,32 @@ describe('GameEngine — applyPassTurn', () => {
     expect(wipeEv?.payload.winnerId).toBe(ids[0]);
   });
 
-  test('após wipe, engine está em PLAYER_TURN (não WIPE_RESOLUTION)', () => {
+  test('após wipe completo, engine volta pra PLAYER_TURN', () => {
+    // Wipe = todos os outros passam consecutivamente após ids[0] jogar.
+    // Com 2 jogadores: ids[0] joga, ids[1] passa → consecutivePasses(1) = activePlayers-1(1) → wipe.
     const { engine, ids } = makeEngine('TRADITIONAL', 2);
     engine.startRound();
-    engine.applyPlayCards(ids[0], [0]);
-    engine.applyPassTurn(ids[1], 0); // wipe — ids[0] vence
-    // ids[0] deve poder jogar imediatamente (é o novo turno dele)
-    const result = engine.applyPlayCards(ids[0], [0]);
-    // Se success=false por outro motivo (ex: mão vazia ou valor menor), não é erro de fase
-    if (!result.success) {
-      expect(result.reason).not.toMatch(/Not the right phase/);
-    } else {
-      expect(result.success).toBe(true);
-    }
+    engine._setStateForTest({
+      hands: {
+        // ids[0] precisa de pelo menos 2 cartas para sobrar mão após jogar 1
+        [ids[0]]: [card(7, 'SUSHI'), card(5, 'RAMEN')],
+        [ids[1]]: [card(1, 'PIZZA')],
+      },
+      pile: [],
+    });
+    // ids[0] joga a primeira carta (pilha vazia, qualquer carta vale)
+    const playResult = engine.applyPlayCards(ids[0], [0]);
+    expect(playResult.success).toBe(true);
+    // ids[1] passa → consecutivePasses=1 = activePlayers-1=1 → wipe, fase vira TRICK_PICK
+    const passResult = engine.applyPassTurn(ids[1], 0);
+    expect(passResult.success).toBe(true);
+    expect(passResult.events.some(e => e.type === 'game:wipe')).toBe(true);
+    expect(passResult.events.find(e => e.type === 'game:wipe')?.payload.winnerId).toBe(ids[0]);
+    // ids[0] descarta a pilha → fase volta para PLAYER_TURN
+    const pickResult = engine.applyTrickPick(ids[0], 'discard');
+    expect(pickResult.success).toBe(true);
+    const state = engine.getClientStateFor(ids[0]);
+    expect(state.phase).toBe('PLAYER_TURN');
   });
 
   test('inserção em index inválido é clamped para range da mão', () => {
