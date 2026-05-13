@@ -331,6 +331,8 @@ export class RoomsService {
   async fillWithBots(code: string) {
     const room = await this.prisma.room.findUnique({ where: { code }, include: { players: true } });
     if (!room || room.status !== 'WAITING') return;
+    // Salas ranqueadas nao recebem bots — descaracteriza a partida
+    if (room.isRanked) return;
     const needed = room.maxPlayers - room.players.length;
     for (let i = 0; i < needed; i++) {
       try { await this.addBot(code, room.hostId); } catch { break; }
@@ -365,6 +367,33 @@ export class RoomsService {
     code: string,
     results: { userId: string; placement: number; tokensLeft: number }[],
   ): Promise<Record<string, { xpEarned: number; coinsEarned: number; newLevel: number; leveledUp: boolean; pdsChange: number; newPds: number; newRank: string }>> {
+    // Idempotência: se room já está FINISHED, retorna sem reprocessar
+    const existing = await this.prisma.room.findUnique({
+      where: { code },
+      select: { id: true, status: true },
+    });
+    if (!existing) throw new NotFoundException('Room not found');
+    if (existing.status === 'FINISHED') {
+      // Já processado — recupera os GameResults e devolve estado atual
+      const existingResults = await this.prisma.gameResult.findMany({
+        where: { roomId: existing.id },
+        include: { user: { select: { pds: true } } },
+      });
+      const replay: Record<string, { xpEarned: number; coinsEarned: number; newLevel: number; leveledUp: boolean; pdsChange: number; newPds: number; newRank: string }> = {};
+      for (const gr of existingResults) {
+        replay[gr.userId] = {
+          xpEarned: gr.xpEarned,
+          coinsEarned: gr.coinsEarned,
+          newLevel: 1,
+          leveledUp: false,
+          pdsChange: 0,
+          newPds: gr.user?.pds ?? 0,
+          newRank: rankFromPds(gr.user?.pds ?? 0),
+        };
+      }
+      return replay;
+    }
+
     const room = await this.prisma.room.update({
       where: { code },
       data: { status: 'FINISHED', endedAt: new Date() },
@@ -384,92 +413,108 @@ export class RoomsService {
       const earned = xpGain(r.placement, totalPlayers);
       const coins = coinsGain(r.placement, totalPlayers);
 
-      await this.prisma.gameResult.create({
-        data: {
-          roomId: room.id,
-          userId: r.userId,
-          placement: r.placement,
-          tokensLeft: r.tokensLeft,
-          xpEarned: earned,
-          coinsEarned: coins,
-          isRanked: room.isRanked,
-        },
-      });
+      // Tudo dentro de uma transação para evitar race condition de streaks:
+      // user.findUnique → calcPdsChange → user.update não pode ser interrompido
+      const txResult = await this.prisma.$transaction(async (tx) => {
+        // Idempotência por (roomId, userId): se já tem GameResult, pula
+        const existingResult = await tx.gameResult.findFirst({
+          where: { roomId: room.id, userId: r.userId },
+          select: { id: true },
+        });
+        if (existingResult) return null;
 
-      await this.prisma.userStats.upsert({
-        where: { userId: r.userId },
-        create: {
-          userId: r.userId,
-          gamesPlayed: 1,
-          gamesWon: r.placement === 1 ? 1 : 0,
-        },
-        update: {
-          gamesPlayed: { increment: 1 },
-          gamesWon: { increment: r.placement === 1 ? 1 : 0 },
-        },
-      });
+        await tx.gameResult.create({
+          data: {
+            roomId: room.id,
+            userId: r.userId,
+            placement: r.placement,
+            tokensLeft: r.tokensLeft,
+            xpEarned: earned,
+            coinsEarned: coins,
+            isRanked: room.isRanked,
+          },
+        });
 
-      const user = await this.prisma.user.findUnique({
-        where: { id: r.userId },
-        select: { xp: true, level: true, pds: true, winStreak: true, lossStreak: true },
-      });
-      if (!user) continue;
-
-      const newXp = (user.xp ?? 0) + earned;
-      const oldLevel = user.level ?? 1;
-      const newLevel = Math.min(computeLevel(newXp), 100);
-
-      let pdsDelta = 0;
-      let newPds = user.pds ?? 0;
-      let newWinStreak = user.winStreak ?? 0;
-      let newLossStreak = user.lossStreak ?? 0;
-
-      if (room.isRanked) {
-        const isWinner = r.placement === 1;
-        if (isWinner) {
-          newWinStreak = (user.winStreak ?? 0) + 1;
-          newLossStreak = 0;
-        } else {
-          newLossStreak = (user.lossStreak ?? 0) + 1;
-          newWinStreak = 0;
-        }
-        pdsDelta = calcPdsChange(r.placement, totalPlayers, user.winStreak ?? 0, user.lossStreak ?? 0);
-        newPds = clampPds((user.pds ?? 0) + pdsDelta, user.pds ?? 0);
-
-        const existingStats = await this.prisma.rankedStats.findUnique({ where: { userId: r.userId }, select: { peakPds: true } });
-        await this.prisma.rankedStats.upsert({
+        await tx.userStats.upsert({
           where: { userId: r.userId },
           create: {
             userId: r.userId,
-            rankedWins: isWinner ? 1 : 0,
-            rankedLosses: isWinner ? 0 : 1,
-            peakPds: newPds,
+            gamesPlayed: 1,
+            gamesWon: r.placement === 1 ? 1 : 0,
           },
           update: {
-            ...(isWinner ? { rankedWins: { increment: 1 } } : { rankedLosses: { increment: 1 } }),
-            ...(newPds > (existingStats?.peakPds ?? 0) ? { peakPds: newPds } : {}),
+            gamesPlayed: { increment: 1 },
+            gamesWon: { increment: r.placement === 1 ? 1 : 0 },
           },
         });
-      }
 
-      await this.prisma.user.update({
-        where: { id: r.userId },
-        data: {
-          xp: newXp,
-          level: newLevel,
-          coins: { increment: coins },
-          ...(room.isRanked ? { pds: newPds, winStreak: newWinStreak, lossStreak: newLossStreak } : {}),
-        },
+        const user = await tx.user.findUnique({
+          where: { id: r.userId },
+          select: { xp: true, level: true, pds: true, winStreak: true, lossStreak: true },
+        });
+        if (!user) return null;
+
+        const newXp = (user.xp ?? 0) + earned;
+        const oldLevel = user.level ?? 1;
+        const newLevel = Math.min(computeLevel(newXp), 100);
+
+        let pdsDelta = 0;
+        let newPds = user.pds ?? 0;
+        let newWinStreak = user.winStreak ?? 0;
+        let newLossStreak = user.lossStreak ?? 0;
+
+        if (room.isRanked) {
+          const isWinner = r.placement === 1;
+          // Calcula delta usando streaks atuais (antes de atualizar), depois atualiza streaks
+          pdsDelta = calcPdsChange(r.placement, totalPlayers, user.winStreak ?? 0, user.lossStreak ?? 0);
+          newPds = clampPds((user.pds ?? 0) + pdsDelta, user.pds ?? 0);
+          if (isWinner) {
+            newWinStreak = (user.winStreak ?? 0) + 1;
+            newLossStreak = 0;
+          } else {
+            newLossStreak = (user.lossStreak ?? 0) + 1;
+            newWinStreak = 0;
+          }
+
+          const existingStats = await tx.rankedStats.findUnique({ where: { userId: r.userId }, select: { peakPds: true } });
+          await tx.rankedStats.upsert({
+            where: { userId: r.userId },
+            create: {
+              userId: r.userId,
+              rankedWins: isWinner ? 1 : 0,
+              rankedLosses: isWinner ? 0 : 1,
+              peakPds: newPds,
+            },
+            update: {
+              ...(isWinner ? { rankedWins: { increment: 1 } } : { rankedLosses: { increment: 1 } }),
+              ...(newPds > (existingStats?.peakPds ?? 0) ? { peakPds: newPds } : {}),
+            },
+          });
+        }
+
+        await tx.user.update({
+          where: { id: r.userId },
+          data: {
+            xp: newXp,
+            level: newLevel,
+            coins: { increment: coins },
+            ...(room.isRanked ? { pds: newPds, winStreak: newWinStreak, lossStreak: newLossStreak } : {}),
+          },
+        });
+
+        return { newXp, newLevel, oldLevel, pdsDelta, newPds };
       });
+
+      if (!txResult) continue;
 
       rewards[r.userId] = {
         xpEarned: earned,
         coinsEarned: coins,
-        newLevel,
-        leveledUp: newLevel > oldLevel,
-        pdsChange: pdsDelta,
-        newPds,
-        newRank: rankFromPds(newPds),
+        newLevel: txResult.newLevel,
+        leveledUp: txResult.newLevel > txResult.oldLevel,
+        pdsChange: txResult.pdsDelta,
+        newPds: txResult.newPds,
+        newRank: rankFromPds(txResult.newPds),
       };
     }
 

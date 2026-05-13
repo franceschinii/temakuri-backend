@@ -40,6 +40,9 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   private matchmakingRooms = new Set<string>(); // roomCodes criados via matchmaking
   private chatCooldowns = new Map<string, number>(); // userId → timestamp último envio
   private reactionCooldowns = new Map<string, number>(); // userId → timestamp última reação
+  // Matchmaking em formacao: roomCode → { players, timeout, isRanked }
+  // Permite cancelar a sala se um jogador desconecta durante a janela de confirmacao.
+  private pendingMatches = new Map<string, { players: QueueEntry[]; isRanked: boolean; confirmTimer: NodeJS.Timeout | null }>();
 
   constructor(
     private jwt: JwtService,
@@ -270,6 +273,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
     this.broadcastToRoom(data.roomCode, 'lobby:player_ready', { userId: client.userId, ready: data.ready });
 
+    // Tambem broadcast o array de confirmados para o frontend sincronizar UI
+    const readySnapshot = Array.from(this.roomReadyMap.get(data.roomCode) ?? []);
+    this.broadcastToRoom(data.roomCode, 'lobby:ready_snapshot', {
+      ready: readySnapshot,
+    });
+
     // Auto-start para salas de matchmaking quando todos os humanos confirmam
     if (this.matchmakingRooms.has(data.roomCode)) {
       const room = await this.roomsService.findByCode(data.roomCode).catch(() => null);
@@ -278,24 +287,8 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         const readySet = this.roomReadyMap.get(data.roomCode) ?? new Set<string>();
         const allReady = humanPlayers.length >= 1 && humanPlayers.every((p: any) => readySet.has(p.userId));
         if (allReady) {
-          this.broadcastToRoom(data.roomCode, 'lobby:game_starting', { countdown: STARTING_COUNTDOWN_MS });
-          setTimeout(async () => {
-            const freshRoom = await this.roomsService.findByCode(data.roomCode).catch(() => null);
-            if (!freshRoom || freshRoom.status !== 'WAITING') return;
-            await this.roomsService.fillWithBots(data.roomCode);
-            const filledRoom = await this.roomsService.findByCode(data.roomCode).catch(() => null);
-            if (!filledRoom || filledRoom.status !== 'WAITING') return;
-            this.roomReadyMap.delete(data.roomCode);
-            this.matchmakingRooms.delete(data.roomCode);
-            const engine = this.roomManager.create(data.roomCode, filledRoom.mode as any, filledRoom.handBias ?? 0, filledRoom.initialTokens ?? 2);
-            filledRoom.players.forEach((p: any) => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: p.isBot, isGuest: p.isGuest, isAdmin: p.isAdmin, level: p.level, pds: p.pds, sessionWins: p.sessionWins }));
-            const bots = new Set<string>(filledRoom.players.filter((p: any) => p.isBot).map((p: any) => p.userId));
-            this.roomBots.set(data.roomCode, bots);
-            await this.roomsService.markStarted(data.roomCode);
-            const events = engine.startRound();
-            this.dispatchEvents(data.roomCode, events);
-            this.scheduleBotMoveIfNeeded(data.roomCode, engine);
-          }, STARTING_COUNTDOWN_MS);
+          // Delega para completeMatchmakingMatch que respeita pending state (ranked check, etc.)
+          this.completeMatchmakingMatch(data.roomCode);
         }
       }
     }
@@ -630,7 +623,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   @OnEvent('matchmaking.found')
-  async handleMatchmakingFound(payload: { roomCode: string; players: QueueEntry[]; createdByUserId: string }) {
+  async handleMatchmakingFound(payload: { roomCode: string; players: QueueEntry[]; createdByUserId: string; isRanked?: boolean }) {
     const { roomCode, players } = payload;
     const CONFIRM_TIMEOUT_MS = 120_000;
 
@@ -638,8 +631,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       this.roomReadyMap.set(roomCode, new Set());
     }
 
-    // Registra como sala de matchmaking para permitir auto-start via handleSetReady
     this.matchmakingRooms.add(roomCode);
+
+    // Detecta se a sala criada e ranqueada (verificacao definitiva via DB)
+    const roomRecord = await this.roomsService.findByCode(roomCode).catch(() => null);
+    const isRanked = roomRecord?.isRanked === true;
 
     for (const player of players) {
       try {
@@ -660,6 +656,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
     const matchPayload = {
       roomCode,
+      isRanked,
       players: players.map(p => ({
         userId: p.userId,
         username: p.username,
@@ -673,59 +670,131 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       this.sendToUser(player.userId, 'matchmaking:match_found', matchPayload);
     }
 
-    // Auto-start after CONFIRM_TIMEOUT_MS regardless of confirmation state
+    // Registra pendingMatch para permitir cancelamento em handleMatchmakingUserDisconnected
+    const confirmTimer = setTimeout(() => this.completeMatchmakingMatch(roomCode), CONFIRM_TIMEOUT_MS);
+    this.pendingMatches.set(roomCode, { players, isRanked, confirmTimer });
+  }
+
+  /**
+   * Finaliza o match: preenche com bots (se permitido) e inicia a partida.
+   * Chamado quando todos confirmam OU quando o CONFIRM_TIMEOUT expira.
+   */
+  private async completeMatchmakingMatch(roomCode: string) {
+    const pending = this.pendingMatches.get(roomCode);
+    if (!pending) return;
+    this.pendingMatches.delete(roomCode);
+    if (pending.confirmTimer) clearTimeout(pending.confirmTimer);
+
+    const room = await this.roomsService.findByCode(roomCode).catch(() => null);
+    if (!room || room.status !== 'WAITING') {
+      this.matchmakingRooms.delete(roomCode);
+      return;
+    }
+
+    const humanPlayers = room.players.filter((p: any) => !p.isBot);
+    if (humanPlayers.length < 1) {
+      this.matchmakingRooms.delete(roomCode);
+      return;
+    }
+
+    // Ranqueada exige todos os 4 humanos. Se nao chegou: cancela sala e devolve confirmados a fila.
+    if (pending.isRanked && humanPlayers.length < 4) {
+      this.cancelRankedMatch(roomCode, pending.players, humanPlayers.map((p: any) => p.userId));
+      return;
+    }
+
+    this.broadcastToRoom(roomCode, 'lobby:game_starting', { countdown: STARTING_COUNTDOWN_MS });
+
     setTimeout(async () => {
-      const room = await this.roomsService.findByCode(roomCode).catch(() => null);
-      if (!room || room.status !== 'WAITING') {
+      let freshRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
+      if (!freshRoom || freshRoom.status !== 'WAITING') {
         this.matchmakingRooms.delete(roomCode);
         return;
       }
 
-      const humanPlayers = room.players.filter((p: any) => !p.isBot);
-      if (humanPlayers.length < 1) {
+      // QUICK pode preencher com bots; RANKED nao (bloqueado no fillWithBots)
+      await this.roomsService.fillWithBots(roomCode);
+      freshRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
+      if (!freshRoom || freshRoom.status !== 'WAITING') {
         this.matchmakingRooms.delete(roomCode);
         return;
       }
 
-      this.broadcastToRoom(roomCode, 'lobby:game_starting', { countdown: STARTING_COUNTDOWN_MS });
+      this.roomReadyMap.delete(roomCode);
+      this.matchmakingRooms.delete(roomCode);
 
-      setTimeout(async () => {
-        let freshRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
-        if (!freshRoom || freshRoom.status !== 'WAITING') {
-          this.matchmakingRooms.delete(roomCode);
-          return;
-        }
+      const engine = this.roomManager.create(roomCode, freshRoom.mode as any, freshRoom.handBias ?? 0, freshRoom.initialTokens ?? 2);
+      freshRoom.players.forEach((p: any) => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: p.isBot, isGuest: p.isGuest, isAdmin: p.isAdmin, level: p.level, pds: p.pds, sessionWins: p.sessionWins }));
 
-        // Fill empty seats with bots before starting
-        await this.roomsService.fillWithBots(roomCode);
-        freshRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
-        if (!freshRoom || freshRoom.status !== 'WAITING') {
-          this.matchmakingRooms.delete(roomCode);
-          return;
-        }
+      const bots = new Set<string>(freshRoom.players.filter((p: any) => p.isBot).map((p: any) => p.userId));
+      this.roomBots.set(roomCode, bots);
 
-        this.roomReadyMap.delete(roomCode);
-        this.matchmakingRooms.delete(roomCode);
+      await this.roomsService.markStarted(roomCode);
 
-        const engine = this.roomManager.create(roomCode, freshRoom.mode as any, freshRoom.handBias ?? 0, freshRoom.initialTokens ?? 2);
-        freshRoom.players.forEach((p: any) => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: p.isBot, isGuest: p.isGuest, isAdmin: p.isAdmin, level: p.level, pds: p.pds, sessionWins: p.sessionWins }));
+      const events = engine.startRound();
+      this.dispatchEvents(roomCode, events);
+      this.scheduleBotMoveIfNeeded(roomCode, engine);
+    }, STARTING_COUNTDOWN_MS);
+  }
 
-        const bots = new Set<string>(freshRoom.players.filter((p: any) => p.isBot).map((p: any) => p.userId));
-        this.roomBots.set(roomCode, bots);
+  /**
+   * Cancela um match ranqueado em formacao: encerra a sala, notifica os jogadores
+   * e devolve `survivors` (humanos ainda conectados) para a fila ranked.
+   */
+  private cancelRankedMatch(roomCode: string, originalPlayers: QueueEntry[], survivorUserIds: string[]) {
+    this.matchmakingRooms.delete(roomCode);
+    this.roomReadyMap.delete(roomCode);
+    this.clearTurnTimer(roomCode);
 
-        await this.roomsService.markStarted(roomCode);
+    // Notifica jogadores sobreviventes que o match foi cancelado e que voltam a fila
+    const survivorSet = new Set(survivorUserIds);
+    for (const player of originalPlayers) {
+      if (survivorSet.has(player.userId)) {
+        this.sendToUser(player.userId, 'matchmaking:cancelled', {
+          reason: 'Um jogador saiu antes de confirmar. Voltando para a fila ranqueada.',
+        });
+      }
+    }
 
-        const events = engine.startRound();
-        this.dispatchEvents(roomCode, events);
-        this.scheduleBotMoveIfNeeded(roomCode, engine);
-      }, STARTING_COUNTDOWN_MS);
-    }, CONFIRM_TIMEOUT_MS);
+    // Limpa sockets registrados na sala
+    this.roomSockets.delete(roomCode);
+
+    // Tenta apagar a sala do DB
+    this.roomsService.leaveRoom(originalPlayers[0]?.userId ?? '', roomCode).catch(() => {});
+
+    // Devolve sobreviventes a fila ranked
+    const survivors = originalPlayers.filter(p => survivorSet.has(p.userId));
+    if (survivors.length > 0) {
+      this.events.emit('matchmaking.requeue', { players: survivors });
+    }
   }
 
   @OnEvent('matchmaking.user_disconnected')
-  handleMatchmakingUserDisconnected(_payload: { userId: string }) {
-    // MatchmakingGateway handles its own disconnect via handleDisconnect.
-    // This event exists for future cross-module listeners.
+  handleMatchmakingUserDisconnected(payload: { userId: string }) {
+    // Procura matches pendentes que incluem esse user e cancela se necessario
+    for (const [roomCode, pending] of this.pendingMatches.entries()) {
+      const isInMatch = pending.players.some(p => p.userId === payload.userId);
+      if (!isInMatch) continue;
+
+      // Verifica se o user tem outros sockets ativos — pode estar em outra aba
+      const otherSockets = this.userSockets.get(payload.userId);
+      if (otherSockets && otherSockets.size > 0) continue;
+
+      // Em ranked: cancela imediatamente
+      if (pending.isRanked) {
+        if (pending.confirmTimer) clearTimeout(pending.confirmTimer);
+        this.pendingMatches.delete(roomCode);
+        const survivors = pending.players
+          .filter(p => p.userId !== payload.userId)
+          .filter(p => {
+            const s = this.userSockets.get(p.userId);
+            return s && s.size > 0;
+          })
+          .map(p => p.userId);
+        this.cancelRankedMatch(roomCode, pending.players, survivors);
+      }
+      // Em QUICK: deixa o timeout cuidar (bots preenchem)
+    }
   }
 
   @OnEvent('rooms.spectator_promoted')

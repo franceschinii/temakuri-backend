@@ -6,6 +6,7 @@
   MessageBody,
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
+import { OnEvent } from '@nestjs/event-emitter';
 import { Server, WebSocket } from 'ws';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MatchmakingService, QueueEntry } from './matchmaking.service.js';
@@ -31,13 +32,13 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
     private events: EventEmitter2,
     private prisma: PrismaService,
   ) {
-    // Poll every 5s to fire solo players who have waited long enough
+    // Poll a cada 5s para disparar jogadores solo que aguardaram tempo suficiente
     this.soloCheckInterval = setInterval(() => {
       for (const type of ['QUICK', 'RANKED'] as const) {
         const matched = this.matchmaking.tryMatch(type);
         if (matched) {
           this.createMatch(matched, type).catch(() => {
-            for (const p of matched) this.matchmaking.joinQueue(p);
+            this.matchmaking.rollbackMatch(matched);
           });
         }
       }
@@ -47,6 +48,25 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
   handleDisconnect(client: AuthenticatedSocket) {
     if (!client.userId) return;
     this.matchmaking.leaveQueue(client.userId);
+  }
+
+  // Listener exposto para NotificationsGateway sinalizar que um match foi cancelado
+  // (ex: jogador desconectou durante a janela de confirmacao). Devolve a fila os players
+  // que ainda querem jogar.
+  onMatchCancelled(players: QueueEntry[]) {
+    this.matchmaking.confirmMatch(players);
+  }
+
+  @OnEvent('matchmaking.requeue')
+  handleRequeue(payload: { players: QueueEntry[] }) {
+    // Recoloca jogadores sobreviventes de um match ranqueado cancelado na fila.
+    // Atualiza joinedAt para start fresh do timer de relaxamento.
+    const now = Date.now();
+    for (const p of payload.players) {
+      // Confirma para liberar do reserved set antes de reinserir
+      this.matchmaking.confirmMatch([p]);
+      this.matchmaking.joinQueue({ ...p, joinedAt: now });
+    }
   }
 
   @SubscribeMessage('matchmaking:join')
@@ -92,7 +112,11 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
     // Attempt to form a match
     const matched = this.matchmaking.tryMatch(type);
     if (matched) {
-      await this.createMatch(matched, type);
+      try {
+        await this.createMatch(matched, type);
+      } catch {
+        this.matchmaking.rollbackMatch(matched);
+      }
     }
   }
 
@@ -114,10 +138,12 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
         initialTokens: 2,
         handBias: 0,
       });
+      // Confirma match: libera reserva sem reinserir na fila
+      this.matchmaking.confirmMatch(players);
       this.events.emit('matchmaking.found', { roomCode: room.code, players, createdByUserId: host.userId });
     } catch (e) {
-      // Put players back in queue on failure
-      for (const p of players) this.matchmaking.joinQueue(p);
+      // Re-throw para que o caller faca rollback (devolve a fila)
+      throw e;
     }
   }
 

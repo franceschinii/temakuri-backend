@@ -19,8 +19,17 @@ export function rankFromPds(pds: number): string {
 }
 
 export function clampPds(newPds: number, oldPds: number): number {
-  const floor = RANK_FLOORS[rankFromPds(oldPds)] ?? 0;
-  return Math.max(floor, newPds);
+  // Floor previne PDS negativo (Bronze 0) e cair múltiplos tiers de uma vez:
+  // só protege o floor do tier *atual*, permitindo demoção legítima para o tier anterior.
+  const oldRank = rankFromPds(oldPds);
+  const newRank = rankFromPds(newPds);
+  if (newRank === oldRank) {
+    const floor = RANK_FLOORS[oldRank] ?? 0;
+    return Math.max(floor, newPds);
+  }
+  // Mudou de tier: aceita o novo PDS, mas garante que não fique abaixo do floor do novo tier
+  const newFloor = RANK_FLOORS[newRank] ?? 0;
+  return Math.max(newFloor, newPds);
 }
 
 export function calcPdsChange(
