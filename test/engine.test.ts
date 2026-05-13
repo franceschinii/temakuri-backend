@@ -518,6 +518,71 @@ describe('GameEngine — modo RODIZIO', () => {
     // então testamos o modo via getMode
     expect(engine.getMode()).toBe('RODIZIO');
   });
+
+  test('rotateHands é invocado e round incrementa após fim de rodada em RODIZIO', () => {
+    // Com 4 jogadores RODIZIO: disparar fim de rodada via mão vazia (p1 joga última carta).
+    // rotateHands() é chamado dentro de resolveRoundEnd → startRound incrementa round.
+    const { engine, ids } = makeEngine('RODIZIO', 4);
+    engine.startRound();
+
+    const roundBefore = engine.getClientStateFor(ids[0]).round;
+
+    // Dar a p1 (seat 0, sempre primeiro a jogar) exatamente 1 carta; deck vazio para
+    // não desenhar; os demais com mão vazia (não interfere no turno atual).
+    engine._setStateForTest({
+      deck: [],
+      hands: {
+        [ids[0]]: [card(3, 'SUSHI', 'test-3s')],
+        [ids[1]]: [],
+        [ids[2]]: [],
+        [ids[3]]: [],
+      },
+    });
+
+    // p1 joga a única carta → mão vazia → resolveRoundEnd → rotateHands → startRound
+    const result = engine.applyPlayCards(ids[0], [0]);
+    expect(result.success).toBe(true);
+
+    const roundAfter = engine.getClientStateFor(ids[0]).round;
+    // round deve ter incrementado: resolveRoundEnd chamou startRound
+    expect(roundAfter).toBeGreaterThan(roundBefore);
+
+    // O evento round_ended deve ter sido emitido
+    const roundEndedEv = result.events.find(e => e.type === 'game:round_ended');
+    expect(roundEndedEv).toBeDefined();
+  });
+
+  test('3 rodadas consecutivas executam sem erro em RODIZIO', () => {
+    // Cada rodada: dar 5 tokens a todos para não atingir game_over prematuramente,
+    // forçar mão de 1 carta em p1 + deck vazio → p1 joga → round encerra.
+    const { engine, ids } = makeEngine('RODIZIO', 4);
+    const highTokens = { [ids[0]]: 5, [ids[1]]: 5, [ids[2]]: 5, [ids[3]]: 5 };
+
+    for (let i = 0; i < 3; i++) {
+      engine.startRound();
+
+      // Garantir tokens suficientes e estado controlado
+      engine._setStateForTest({
+        deck: [],
+        tokens: highTokens,
+        hands: {
+          [ids[0]]: [card(3, 'SUSHI', `r${i}-card`)],
+          [ids[1]]: [],
+          [ids[2]]: [],
+          [ids[3]]: [],
+        },
+      });
+
+      // p1 (seat 0) é o primeiro a jogar → joga a única carta → round encerra
+      const result = engine.applyPlayCards(ids[0], [0]);
+      expect(result.success).toBe(true);
+    }
+
+    const finalState = engine.getClientStateFor(ids[0]);
+    // Ao final de 3 iterações (cada uma iniciando com startRound + round_end que chama startRound),
+    // o contador de round deve ter avançado pelo menos 3 vezes.
+    expect(finalState.round).toBeGreaterThanOrEqual(3);
+  });
 });
 
 // ─── segurança / anti-fraude ────────────────────────────────────────────────
