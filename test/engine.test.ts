@@ -433,6 +433,73 @@ describe('GameEngine — modo MERCADO', () => {
     const fail2 = engine.applyMarketSwap(ids[0], 0, 99);
     expect(fail2.success).toBe(false);
   });
+
+  test('applyMarketSwap rejeita handIndex inválido (negativo)', () => {
+    const { engine, ids } = makeEngine('MERCADO', 2);
+    engine.startRound();
+    engine.applyPlayCards(ids[0], [0]);
+    engine.applyPassTurn(ids[1], 0); // wipe → ids[0] vence
+
+    const result = engine.applyMarketSwap(ids[0], -1, 0);
+    expect(result.success).toBe(false);
+  });
+
+  test('applyMarketSwap rejeita marketIndex inválido (negativo)', () => {
+    const { engine, ids } = makeEngine('MERCADO', 2);
+    engine.startRound();
+    engine.applyPlayCards(ids[0], [0]);
+    engine.applyPassTurn(ids[1], 0); // wipe → ids[0] vence
+
+    const result = engine.applyMarketSwap(ids[0], 0, -1);
+    expect(result.success).toBe(false);
+  });
+
+  test('applyMarketSwap troca corretamente carta da mão pela do mercado', () => {
+    const { engine, ids } = makeEngine('MERCADO', 2);
+    engine.startRound();
+
+    const before = engine.getClientStateFor(ids[0]);
+    const handCardId = before.myHand[0].id;
+    const marketCardId = before.market![0].id;
+
+    engine.applyPlayCards(ids[0], [0]);
+    engine.applyPassTurn(ids[1], 0); // wipe → ids[0] vence
+
+    // Após o wipe a mão de ids[0] mudou (a carta jogada saiu). Capturamos o estado pós-wipe.
+    const postWipe = engine.getClientStateFor(ids[0]);
+    const postWipeHandCardId = postWipe.myHand[0].id;
+    const postWipeMarketCardId = postWipe.market![0].id;
+
+    const result = engine.applyMarketSwap(ids[0], 0, 0);
+    expect(result.success).toBe(true);
+
+    const after = engine.getClientStateFor(ids[0]);
+    // A carta que estava no mercado[0] deve agora estar na mão
+    expect(after.myHand.some(c => c.id === postWipeMarketCardId)).toBe(true);
+    // A carta que estava na mão[0] deve agora estar no mercado
+    expect(after.market!.some(c => c.id === postWipeHandCardId)).toBe(true);
+  });
+
+  test('mercado mantém invariantes mesmo com drawPile esgotado', () => {
+    const { engine, ids } = makeEngine('MERCADO', 2);
+    engine.startRound();
+
+    // Esgota o drawPile
+    engine._setStateForTest({ deck: [] });
+
+    engine.applyPlayCards(ids[0], [0]);
+    engine.applyPassTurn(ids[1], 0); // wipe → ids[0] vence
+
+    // O swap deve funcionar (o mercado não depende do drawPile para trocar)
+    const result = engine.applyMarketSwap(ids[0], 0, 0);
+    expect(result.success).toBe(true);
+
+    const state = engine.getClientStateFor(ids[0]);
+    // O mercado não sofre refill após swap — tamanho permanece igual ao de antes do swap
+    // mas deve ser coerente: entre 0 e MARKET_SIZE (3)
+    expect((state.market ?? []).length).toBeGreaterThanOrEqual(0);
+    expect((state.market ?? []).length).toBeLessThanOrEqual(3);
+  });
 });
 
 describe('GameEngine — modo RODIZIO', () => {
