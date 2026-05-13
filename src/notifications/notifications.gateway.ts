@@ -224,6 +224,8 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   async handleLeaveRoom(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string }) {
     if (!client.userId) return;
 
+    this.clearTurnTimer(data.roomCode);
+
     await this.roomsService.leaveRoom(client.userId, data.roomCode);
     client.roomCode = undefined;
 
@@ -396,6 +398,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (engine.isGameOver()) {
       const rankings = result.events.find(e => e.type === 'game:game_over')?.payload?.['rankings'] as any[];
       if (rankings) {
+        this.clearTurnTimer(data.roomCode);
         this.roomsService.markFinished(data.roomCode, rankings.map(r => ({
           userId: r.userId,
           placement: r.placement,
@@ -406,7 +409,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
             this.broadcastToRoom(data.roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
           }
         }).catch(() => {});
-        setTimeout(() => this.roomManager.destroy(data.roomCode), 60_000);
+        setTimeout(() => {
+          this.roomManager.destroy(data.roomCode);
+          this.roomSockets.delete(data.roomCode);
+          this.roomBots.delete(data.roomCode);
+        }, 60_000);
       }
     }
   }
@@ -587,6 +594,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         if (currentEngine.isGameOver()) {
           const rankings = result.events.find(e => e.type === 'game:game_over')?.payload?.['rankings'] as any[];
           if (rankings) {
+            this.clearTurnTimer(roomCode);
             this.roomsService.markFinished(roomCode, rankings.map(r => ({
               userId: r.userId,
               placement: r.placement,
@@ -597,7 +605,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
                 this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
               }
             }).catch(() => {});
-            setTimeout(() => this.roomManager.destroy(roomCode), 60_000);
+            setTimeout(() => {
+              this.roomManager.destroy(roomCode);
+              this.roomSockets.delete(roomCode);
+              this.roomBots.delete(roomCode);
+            }, 60_000);
           }
         } else {
           this.scheduleBotMoveIfNeeded(roomCode, currentEngine);
@@ -750,10 +762,18 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         this.broadcastToRoom(roomCode, event.type, event.payload);
       }
 
-      // Arm turn timer whenever a new turn starts
+      // Arm turn timer whenever a new turn starts or a pick dialog is offered
       if (event.type === 'game:turn_started') {
         const { userId, timeoutMs } = event.payload as { userId: string; timeoutMs: number };
         this.armTurnTimer(roomCode, userId, timeoutMs);
+      } else if (
+        event.type === 'game:trick_pick_offer' ||
+        event.type === 'game:duel_pass_offer' ||
+        event.type === 'game:card_drawn'
+      ) {
+        // Pick dialogs/draw have no turn_started — arm timer so AFK player doesn't freeze the game
+        const userId = event.targetUserId!;
+        this.armTurnTimer(roomCode, userId, 20_000);
       }
     }
   }
@@ -802,7 +822,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
                 this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
               }
             }).catch(() => {});
-            setTimeout(() => this.roomManager.destroy(roomCode), 60_000);
+            setTimeout(() => {
+              this.roomManager.destroy(roomCode);
+              this.roomSockets.delete(roomCode);
+              this.roomBots.delete(roomCode);
+            }, 60_000);
           }
         }
       }

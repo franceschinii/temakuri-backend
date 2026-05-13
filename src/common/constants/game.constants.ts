@@ -32,7 +32,7 @@ export const HAND_SIZE: Record<number, number> = {
 };
 
 export const INITIAL_TOKENS = 2;
-export const TURN_TIMEOUT_MS = Number(process.env.TURN_TIMEOUT_MS ?? 30_000);
+export const TURN_TIMEOUT_MS = Number(process.env.TURN_TIMEOUT_MS ?? 20_000);
 export const MARKET_SIZE = 3;
 export const STARTING_COUNTDOWN_MS = Number(process.env.STARTING_COUNTDOWN_MS ?? 3_000);
 
