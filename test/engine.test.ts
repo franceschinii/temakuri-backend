@@ -867,3 +867,53 @@ describe('GameEngine — Duelo (2 jogadores)', () => {
     expect(state.phase).toBe('DUEL_PASS_PICK');
   });
 });
+
+// ─── tokens e eliminação ─────────────────────────────────────────────────────
+
+describe('GameEngine — tokens e eliminação', () => {
+  test('jogador que esgota tokens tem tokensLeft=0 e dispara GAME_OVER', () => {
+    // ids[1] começa com 1 token. Esvazia a mão → perde 1 token → tokensLeft=0 → GAME_OVER.
+    const { engine, ids } = makeEngine('TRADITIONAL', 4);
+    engine.startRound();
+    engine._setStateForTest({
+      tokens: { [ids[0]]: 2, [ids[1]]: 1, [ids[2]]: 2, [ids[3]]: 2 },
+      hands: {
+        [ids[0]]: [card(2, 'PIZZA', 'p1'), card(3, 'SUSHI', 's1')],
+        [ids[1]]: [card(5, 'SUSHI', 's2')],
+        [ids[2]]: [card(3, 'TACO', 't1'), card(4, 'TACO', 't2')],
+        [ids[3]]: [card(3, 'CURRY', 'c1'), card(4, 'CURRY', 'c2')],
+      },
+      pile: [],
+    });
+    // ids[0] joga primeiro (pilha vazia — qualquer carta é válida)
+    engine.applyPlayCards(ids[0], [0]);
+    // ids[1] joga 5-SUSHI (bate 2-PIZZA na pilha) e esvazia a mão → perde 1 token → 0 → GAME_OVER
+    engine.applyPlayCards(ids[1], [0]);
+    const state = engine.getClientStateFor(ids[0]);
+    expect(state.phase).toBe('GAME_OVER');
+    const p1 = state.players.find(p => p.userId === ids[1])!;
+    expect(p1.tokensLeft).toBe(0);
+  });
+
+  test('último jogador com tokens vence o jogo (GAME_OVER)', () => {
+    // Cenário 2P: ids[1] esvazia a mão → tokensLeft 1→0 → GAME_OVER.
+    const { engine, ids } = makeEngine('TRADITIONAL', 2);
+    engine.startRound();
+    engine._setStateForTest({
+      tokens: { [ids[0]]: 2, [ids[1]]: 1 },
+      hands: {
+        [ids[0]]: [card(2, 'PIZZA', 'p1'), card(3, 'SUSHI', 's1')],
+        [ids[1]]: [card(5, 'SUSHI', 's2')],
+      },
+      pile: [],
+    });
+    // ids[0] joga primeiro (pilha vazia)
+    engine.applyPlayCards(ids[0], [0]);
+    // ids[1] joga carta que bate e esvazia a mão → eliminado → game over
+    const result = engine.applyPlayCards(ids[1], [0]);
+    const state = engine.getClientStateFor(ids[0]);
+    expect(state.phase).toBe('GAME_OVER');
+    const gameOverEvent = result.events.find(e => e.type === 'game:game_over');
+    expect(gameOverEvent).toBeDefined();
+  });
+});
