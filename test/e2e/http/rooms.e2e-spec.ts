@@ -122,10 +122,10 @@ describe('Rooms (e2e)', () => {
       expect(bots.length).toBeGreaterThan(0);
     });
 
-    it('não-host recebe 400', async () => {
+    it('não-host recebe 403', async () => {
       const r = await createRoom(app, auth.tokens.alice, {});
       const res = await addBot(app, auth.tokens.bob, r.code);
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(403);
     });
 
     it('sala cheia rejeita com 400', async () => {
@@ -151,12 +151,12 @@ describe('Rooms (e2e)', () => {
       expect(remainingBots).toHaveLength(0);
     });
 
-    it('não-host recebe 400', async () => {
+    it('não-host recebe 403', async () => {
       const r = await createRoom(app, auth.tokens.alice, { maxPlayers: 4 });
       const added = (await addBot(app, auth.tokens.alice, r.code)).body;
       const bot = added.players.find((p: { isBot: boolean }) => p.isBot)!;
       const res = await removeBot(app, auth.tokens.bob, r.code, bot.userId);
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(403);
     });
   });
 
@@ -168,12 +168,10 @@ describe('Rooms (e2e)', () => {
       expect(res.body.status).toBe('WAITING');
     });
 
-    it('não-host consegue resetar (sem guarda de host no controller) — retorna 201', async () => {
+    it('não-host recebe 403', async () => {
       const r = await createRoom(app, auth.tokens.alice, {});
       const res = await resetRoom(app, auth.tokens.bob, r.code);
-      // resetRoom controller does not check host ownership — any authed user can reset
-      expect(res.status).toBe(201);
-      expect(res.body.status).toBe('WAITING');
+      expect(res.status).toBe(403);
     });
   });
 });

@@ -17,31 +17,15 @@ export class RoomsService {
   ) {}
 
   async createMatchmakingRoom(hostId: string, dto: CreateRoomDto) {
-    let code: string;
-    let attempts = 0;
-    do {
-      code = generateCode();
-      attempts++;
-      if (attempts > 20) throw new BadRequestException('Could not generate unique room code');
-    } while (await this.prisma.room.findUnique({ where: { code } }));
-
-    const room = await this.prisma.room.create({
-      data: {
-        code,
-        hostId,
-        mode: dto.mode,
-        maxPlayers: dto.maxPlayers,
-        isPrivate: dto.isPrivate ?? false,
-        isRanked: dto.isRanked ?? false,
-        handBias: dto.handBias ?? 0,
-        initialTokens: dto.initialTokens ?? 2,
-        password: dto.password?.trim() || null,
-        status: 'WAITING',
-        players: {
-          create: { userId: hostId, seat: 0, status: 'CONNECTED' },
-        },
-      },
-      include: { players: { include: { user: true } } },
+    const room = await this.createRoomWithUniqueCodeRetry({
+      hostId,
+      mode: dto.mode,
+      maxPlayers: dto.maxPlayers,
+      isPrivate: dto.isPrivate ?? false,
+      isRanked: dto.isRanked ?? false,
+      handBias: dto.handBias ?? 0,
+      initialTokens: dto.initialTokens ?? 2,
+      password: dto.password?.trim() || null,
     });
 
     if (!room.isPrivate) this.events.emit('rooms.public.changed');
@@ -71,35 +55,58 @@ export class RoomsService {
       }
     }
 
-    let code: string;
-    let attempts = 0;
-    do {
-      code = generateCode();
-      attempts++;
-      if (attempts > 20) throw new BadRequestException('Could not generate unique room code');
-    } while (await this.prisma.room.findUnique({ where: { code } }));
-
-    const room = await this.prisma.room.create({
-      data: {
-        code,
-        hostId,
-        mode: dto.mode,
-        maxPlayers: dto.maxPlayers,
-        isPrivate: dto.isPrivate ?? true,
-        isRanked: dto.isRanked ?? false,
-        handBias: dto.handBias ?? 0,
-        initialTokens: dto.initialTokens ?? 2,
-        password: dto.password?.trim() || null,
-        status: 'WAITING',
-        players: {
-          create: { userId: hostId, seat: 0, status: 'CONNECTED' },
-        },
-      },
-      include: { players: { include: { user: true } } },
+    const room = await this.createRoomWithUniqueCodeRetry({
+      hostId,
+      mode: dto.mode,
+      maxPlayers: dto.maxPlayers,
+      isPrivate: dto.isPrivate ?? true,
+      isRanked: dto.isRanked ?? false,
+      handBias: dto.handBias ?? 0,
+      initialTokens: dto.initialTokens ?? 2,
+      password: dto.password?.trim() || null,
     });
 
     if (!room.isPrivate) this.events.emit('rooms.public.changed');
     return this.formatRoom(room);
+  }
+
+  private async createRoomWithUniqueCodeRetry(data: {
+    hostId: string;
+    mode: string;
+    maxPlayers: number;
+    isPrivate: boolean;
+    isRanked: boolean;
+    handBias: number;
+    initialTokens: number;
+    password: string | null;
+  }) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.prisma.room.create({
+          data: {
+            code: generateCode(),
+            hostId: data.hostId,
+            mode: data.mode,
+            maxPlayers: data.maxPlayers,
+            isPrivate: data.isPrivate,
+            isRanked: data.isRanked,
+            handBias: data.handBias,
+            initialTokens: data.initialTokens,
+            password: data.password,
+            status: 'WAITING',
+            players: {
+              create: { userId: data.hostId, seat: 0, status: 'CONNECTED' },
+            },
+          },
+          include: { players: { include: { user: true } } },
+        });
+      } catch (err) {
+        const isUniqueViolation =
+          err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
+        if (!isUniqueViolation) throw err;
+        if (attempt >= 19) throw new BadRequestException('Could not generate unique room code');
+      }
+    }
   }
 
   async findAll(mode?: string, status?: string) {
@@ -264,7 +271,7 @@ export class RoomsService {
       include: { players: true },
     });
     if (!room) throw new NotFoundException('Room not found');
-    if (room.hostId !== hostUserId) throw new BadRequestException('Only the host can add bots');
+    if (room.hostId !== hostUserId) throw new ForbiddenException('Only the host can add bots');
     if (room.status !== 'WAITING') throw new BadRequestException('Room already started');
     if (room.players.length >= room.maxPlayers) throw new BadRequestException('Room is full');
 
@@ -333,7 +340,7 @@ export class RoomsService {
   async removeBot(code: string, hostUserId: string, botUserId: string) {
     const room = await this.prisma.room.findUnique({ where: { code }, include: { players: true } });
     if (!room) throw new NotFoundException('Room not found');
-    if (room.hostId !== hostUserId) throw new BadRequestException('Only the host can remove bots');
+    if (room.hostId !== hostUserId) throw new ForbiddenException('Only the host can remove bots');
 
     const bot = await this.prisma.user.findUnique({ where: { id: botUserId } });
     if (!bot?.isBot) throw new BadRequestException('Player is not a bot');
@@ -483,12 +490,13 @@ export class RoomsService {
     return rewards;
   }
 
-  async resetRoom(code: string) {
+  async resetRoom(code: string, userId: string) {
     const room = await this.prisma.room.findUnique({
       where: { code },
       include: { players: { include: { user: { select: { id: true, isBot: true } } } } },
     });
     if (!room) throw new NotFoundException('Room not found');
+    if (room.hostId !== userId) throw new ForbiddenException('Only the host can reset the room');
 
     // Identificar e remover bots
     const botUserIds = room.players
