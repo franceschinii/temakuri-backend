@@ -256,67 +256,78 @@ export class RoomsService {
   }
 
   async leaveRoom(userId: string, code: string) {
-    const room = await this.prisma.room.findUnique({ where: { code }, include: { players: true } });
-    if (!room) return;
+    // Race condition: 2 jogadores saindo simultaneamente leem o mesmo snapshot
+    // do room e processam decisões com dados desatualizados, deixando a sala
+    // com host fantasma. Solução: transação que re-le o estado após o delete
+    // e decide com snapshot fresco.
+    const result = await this.prisma.$transaction(async (tx) => {
+      const room = await tx.room.findUnique({ where: { code }, include: { players: true } });
+      if (!room) return null;
 
-    await this.prisma.roomPlayer.deleteMany({ where: { roomId: room.id, userId } });
+      await tx.roomPlayer.deleteMany({ where: { roomId: room.id, userId } });
 
-    if (room.hostId === userId) {
-      // Host saindo: tenta promover proximo humano antes de fechar a sala
-      const remaining = room.players.filter(p => p.userId !== userId);
-      const remainingIds = remaining.map(p => p.userId);
-      let newHost: { id: string } | null = null;
-      if (remainingIds.length > 0) {
-        // Procura outro humano (nao bot, nao guest) para promover
-        newHost = await this.prisma.user.findFirst({
-          where: { id: { in: remainingIds }, isBot: false, isGuest: false, isBanned: false },
-          select: { id: true },
-        });
+      // Re-lê players após o delete para ver o estado pós-saída
+      const freshPlayers = await tx.roomPlayer.findMany({
+        where: { roomId: room.id },
+        include: { user: { select: { id: true, isBot: true, isGuest: true } } },
+      });
+
+      const isHostLeaving = room.hostId === userId;
+      const remainingIds = freshPlayers.map(p => p.userId);
+      const humanRemaining = freshPlayers.filter(p => !p.user?.isBot && !p.user?.isGuest);
+
+      // Caso 1: ninguém restou → deleta sala
+      if (freshPlayers.length === 0) {
+        await tx.room.delete({ where: { id: room.id } });
+        return { action: 'deleted', isPrivate: room.isPrivate };
       }
 
-      if (newHost) {
-        await this.prisma.room.update({ where: { id: room.id }, data: { hostId: newHost.id } });
-        if (!room.isPrivate) this.events.emit('rooms.public.changed');
-        this.events.emit('rooms.host_changed', { roomCode: code, newHostId: newHost.id });
-        return;
-      }
-
-      // Sem humano para promover: limpa bots/guests e fecha a sala
-      if (remainingIds.length > 0) {
-        const ephemeral = await this.prisma.user.findMany({
-          where: { id: { in: remainingIds }, OR: [{ isBot: true }, { isGuest: true }] },
-          select: { id: true },
-        });
-        if (ephemeral.length > 0) {
-          await this.deleteEphemeralUsers(ephemeral.map(u => u.id));
+      // Caso 2: só sobraram bots/guests → limpa efêmeros e deleta sala
+      if (humanRemaining.length === 0) {
+        const ephemeralIds = freshPlayers.filter(p => p.user?.isBot || p.user?.isGuest).map(p => p.userId);
+        if (ephemeralIds.length > 0) {
+          await tx.gameResult.deleteMany({ where: { userId: { in: ephemeralIds } } });
+          await tx.userInventory.deleteMany({ where: { userId: { in: ephemeralIds } } });
+          await tx.userStats.deleteMany({ where: { userId: { in: ephemeralIds } } });
+          await tx.rankedStats.deleteMany({ where: { userId: { in: ephemeralIds } } });
+          await tx.roomPlayer.deleteMany({ where: { userId: { in: ephemeralIds } } });
+          await tx.user.deleteMany({ where: { id: { in: ephemeralIds } } });
         }
+        await tx.room.delete({ where: { id: room.id } });
+        return { action: 'deleted', isPrivate: room.isPrivate };
       }
-      await this.prisma.room.delete({ where: { id: room.id } });
-    } else {
+
+      // Caso 3: host saiu, mas sobrou humano → promove primeiro humano
+      if (isHostLeaving) {
+        const newHostId = humanRemaining[0].userId;
+        await tx.room.update({ where: { id: room.id }, data: { hostId: newHostId } });
+        return { action: 'hostChanged', newHostId, isPrivate: room.isPrivate };
+      }
+
+      // Caso 4: non-host saiu, ainda há humano → segue para spectator promotion
+      return { action: 'continue', remainingIds, freshPlayers, room };
+    });
+
+    if (!result) return;
+
+    if (result.action === 'deleted') {
+      if (!result.isPrivate) this.events.emit('rooms.public.changed');
+      return;
+    }
+
+    if (result.action === 'hostChanged') {
+      if (!result.isPrivate) this.events.emit('rooms.public.changed');
+      this.events.emit('rooms.host_changed', { roomCode: code, newHostId: result.newHostId });
+      return;
+    }
+
+    // result.action === 'continue' — non-host saiu, falta tratar spectator promotion
+    const { room } = result;
+    {
       // Non-host leaving — free username if guest
       const leaving = await this.prisma.user.findUnique({ where: { id: userId }, select: { isGuest: true } });
       if (leaving?.isGuest) {
         await this.deleteEphemeralUsers([userId]);
-      }
-
-      // If no human players remain after this person leaves, clean up bots and close the room
-      const remaining = room.players.filter(p => p.userId !== userId);
-      if (remaining.length === 0) {
-        await this.prisma.room.delete({ where: { id: room.id } });
-        if (!room.isPrivate) this.events.emit('rooms.public.changed');
-        return;
-      }
-
-      const remainingIds = remaining.map(p => p.userId);
-      const remainingBots = await this.prisma.user.findMany({
-        where: { id: { in: remainingIds }, isBot: true },
-        select: { id: true },
-      });
-      if (remainingBots.length === remaining.length) {
-        await this.deleteEphemeralUsers(remainingBots.map(b => b.id));
-        await this.prisma.room.delete({ where: { id: room.id } });
-        if (!room.isPrivate) this.events.emit('rooms.public.changed');
-        return;
       }
 
       // Sala WAITING: promove o primeiro espectador aguardando para jogador ativo
