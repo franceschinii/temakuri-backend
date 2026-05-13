@@ -260,12 +260,16 @@ export class GameEngine {
     this.pendingDraws.delete(userId); // defensive: discard any stale pending draw
 
     const player = this.findPlayer(userId)!;
+
+    if (insertAtIndex < 0 || insertAtIndex > player.hand.length) {
+      return this.fail('insertAtIndex out of range');
+    }
+
     // Draw from the finite deck (monte) — null if exhausted
     const drawnCard = this.drawPile.length > 0 ? this.drawPile.shift()! : null;
 
     if (drawnCard) {
-      const clampedInsert = Math.max(0, Math.min(insertAtIndex, player.hand.length));
-      player.hand.splice(clampedInsert, 0, drawnCard);
+      player.hand.splice(insertAtIndex, 0, drawnCard);
     }
 
     this.consecutivePasses++;

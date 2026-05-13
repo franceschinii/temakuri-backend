@@ -369,13 +369,14 @@ describe('GameEngine — applyPassTurn', () => {
     expect(state.phase).toBe('PLAYER_TURN');
   });
 
-  test('inserção em index inválido é clamped para range da mão', () => {
+  test('inserção em index inválido é rejeitado', () => {
     const { engine, ids } = makeEngine('TRADITIONAL', 2);
     engine.startRound();
     engine.applyPlayCards(ids[0], [0]);
-    // insertAtIndex=999 — deve ser clamped para hand.length
+    // insertAtIndex=999 está fora do range da mão → deve ser rejeitado
     const result = engine.applyPassTurn(ids[1], 999);
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.reason).toMatch(/insertAtIndex out of range/);
   });
 });
 
@@ -540,12 +541,23 @@ describe('anti-fraude', () => {
   });
 
   test('picCardIndex fora do range da pilha é rejeitado', () => {
-    const { engine, ids } = makeEngine();
+    const { engine, ids } = makeEngine('TRADITIONAL', 2);
     engine.startRound();
-    engine.applyPlayCards(ids[0], [0]); // pilha tem 1 carta
-    const result = engine.applyPassTurn(ids[1], 0); // index 5 inexistente
+    // ids[0] tem 2 cartas (não esvazia a mão ao jogar), ids[1] tem 1 carta
+    // deck tem 1 carta para ser sacada no applyPassTurn
+    engine._setStateForTest({
+      hands: {
+        [ids[0]]: [card(5, 'SUSHI'), card(3, 'TACO')],
+        [ids[1]]: [card(1, 'PIZZA')],
+      },
+      deck: [card(7, 'RAMEN')],
+      pile: [],
+    });
+    engine.applyPlayCards(ids[0], [0]); // ids[0] joga 1 carta, ainda tem 1 → turn avança para ids[1]
+    // ids[1] tem 1 carta na mão; insertAtIndex válido seria 0 ou 1; 99 é fora do range
+    const result = engine.applyPassTurn(ids[1], 99);
     expect(result.success).toBe(false);
-    expect(result.reason).toMatch(/Invalid pick index/);
+    expect(result.reason).toMatch(/insertAtIndex out of range/);
   });
 });
 
