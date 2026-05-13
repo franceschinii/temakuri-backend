@@ -278,6 +278,9 @@ export class GameEngine {
     }
 
     const usedPlates = selectedPlateCards && selectedPlateCards.length > 0;
+    // Sinaliza ao broadcast se o jogador vai entrar em TRICK_PICK depois desta jogada (regra A2),
+    // para os outros clientes saberem que o turno NAO avancou ainda.
+    const willEnterTrickPick = previousPile.length > 0 && player.hand.length > 0;
     events.push({
       type: 'game:cards_played',
       payload: {
@@ -286,6 +289,7 @@ export class GameEngine {
         isSabor: saborTriggered,
         usedPlates: usedPlates ? selectedPlateCards : undefined,
         remainingPlates: usedPlates ? (this.duelPlates.get(userId) ?? []) : undefined,
+        nextPhase: willEnterTrickPick ? 'TRICK_PICK' : 'PLAYER_TURN',
       },
     });
     events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
@@ -672,6 +676,11 @@ export class GameEngine {
     this.trickPileForPick = [];
     this.phase = 'PLAYER_TURN';
 
+    // Avanca turno ANTES de emitir trick_pick_result, para incluir nextTurnUserId no payload.
+    // Isso permite ao frontend sincronizar mesmo se o game:turn_started for perdido.
+    this.advanceTurn();
+    const nextUserId = this.currentPlayer().userId;
+
     events.push({
       type: 'game:trick_pick_result',
       payload: {
@@ -679,13 +688,10 @@ export class GameEngine {
         action,
         discardedCards: action === 'discard' ? resolvedCards : [],
         takenCount: action === 'take' ? resolvedCards.length : 0,
+        nextTurnUserId: nextUserId,
       },
     });
-
-    // Após A2, avança o turno para o próximo jogador. A pile atual fica com a
-    // jogada vencedora que esta acabou de fazer (não é zerada).
-    this.advanceTurn();
-    events.push({ type: 'game:turn_started', payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS } });
+    events.push({ type: 'game:turn_started', payload: { userId: nextUserId, timeoutMs: TURN_TIMEOUT_MS } });
 
     this.assertCardIntegrity();
     return { success: true, events };

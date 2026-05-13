@@ -879,9 +879,27 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         event.type === 'game:duel_pass_offer' ||
         event.type === 'game:card_drawn'
       ) {
-        // Pick dialogs/draw have no turn_started — arm timer so AFK player doesn't freeze the game
+        // Pick dialogs/draw nao tem turn_started — arma timer para AFK nao travar o jogo
         const userId = event.targetUserId!;
-        this.armTurnTimer(roomCode, userId, 20_000);
+        this.armTurnTimer(roomCode, userId, 30_000);
+
+        // Heartbeat em TRICK_PICK: 10s apos abrir o dialog, faz broadcast ao
+        // restante da sala com a fase atual. Garante resync mesmo se algum
+        // cliente tiver perdido o cards_played com nextPhase=TRICK_PICK.
+        if (event.type === 'game:trick_pick_offer') {
+          const phaseRoomCode = roomCode;
+          const phaseUserId = userId;
+          setTimeout(() => {
+            const eng = this.roomManager.get(phaseRoomCode);
+            if (!eng) return;
+            if (eng.getPhase() !== 'TRICK_PICK') return;
+            if (eng.currentTurnUserId() !== phaseUserId) return;
+            this.broadcastToRoom(phaseRoomCode, 'game:phase_heartbeat', {
+              phase: 'TRICK_PICK',
+              currentTurnUserId: phaseUserId,
+            });
+          }, 10_000);
+        }
       }
     }
   }
