@@ -27,16 +27,18 @@ WebSocket em ws://localhost:3001/ws?token=<JWT>
 
 ## Rodando testes
 
-### Unit (motor do jogo)
+167 testes em 4 camadas (motor / HTTP / WebSocket gateway / flow E2E). Design completo em [`docs/superpowers/specs/2026-05-12-test-coverage-design.md`](docs/superpowers/specs/2026-05-12-test-coverage-design.md), com planos por camada em [`docs/superpowers/plans/`](docs/superpowers/plans/).
+
+### Unit (motor do jogo — 92 testes)
 
 Não toca o banco, roda em segundos:
 
 ```bash
-npm test          # uma vez
+npm test            # uma vez
 npm run test:watch  # watch mode
 ```
 
-### E2E (HTTP + Prisma)
+### E2E (HTTP + WS Gateway + Flow — 75 testes)
 
 Requer um Postgres acessível **em uma porta separada do DB de dev** — o teste usa o banco `temakuri_test` e dropa/recria dados.
 
@@ -57,3 +59,5 @@ psql -U postgres -c "CREATE DATABASE temakuri_test;"
 ```
 
 > **Nota temporária**: o setup usa `prisma db push` em vez de `migrate deploy` porque há drift entre `schema.prisma` e `prisma/migrations/`. Trocar pra `migrate deploy` assim que a migration catch-up for commitada.
+
+> Há também uma 5ª camada Playwright (~18 testes de bots jogando) no [repo temakuri-frontend](https://github.com/franceschinii/temakuri-frontend#rodando-testes), que roda contra esta stack.
