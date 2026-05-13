@@ -224,6 +224,8 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   async handleLeaveRoom(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string }) {
     if (!client.userId) return;
 
+    this.clearTurnTimer(data.roomCode);
+
     await this.roomsService.leaveRoom(client.userId, data.roomCode);
     client.roomCode = undefined;
 
@@ -406,7 +408,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
             this.broadcastToRoom(data.roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
           }
         }).catch(() => {});
-        setTimeout(() => this.roomManager.destroy(data.roomCode), 60_000);
+        setTimeout(() => {
+          this.roomManager.destroy(data.roomCode);
+          this.roomSockets.delete(data.roomCode);
+          this.roomBots.delete(data.roomCode);
+        }, 60_000);
       }
     }
   }
@@ -597,7 +603,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
                 this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
               }
             }).catch(() => {});
-            setTimeout(() => this.roomManager.destroy(roomCode), 60_000);
+            setTimeout(() => {
+              this.roomManager.destroy(roomCode);
+              this.roomSockets.delete(roomCode);
+              this.roomBots.delete(roomCode);
+            }, 60_000);
           }
         } else {
           this.scheduleBotMoveIfNeeded(roomCode, currentEngine);
@@ -802,7 +812,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
                 this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
               }
             }).catch(() => {});
-            setTimeout(() => this.roomManager.destroy(roomCode), 60_000);
+            setTimeout(() => {
+              this.roomManager.destroy(roomCode);
+              this.roomSockets.delete(roomCode);
+              this.roomBots.delete(roomCode);
+            }, 60_000);
           }
         }
       }
