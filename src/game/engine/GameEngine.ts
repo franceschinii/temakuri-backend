@@ -59,6 +59,8 @@ export class GameEngine {
   // Modo Duelo (2 jogadores): Pratos do Dia por jogador
   private duelPlates: Map<string, Card[]> = new Map();
   private pendingDuelPick: string | null = null; // userId aguardando escolha de Prato do Dia
+  // Contagem de passes por jogador na rodada atual (Duelo: 3 passes = derrota)
+  private duelPassCount: Map<string, number> = new Map();
 
   private initialTokens: number;
 
@@ -119,9 +121,11 @@ export class GameEngine {
     // Modo Duelo: distribuir 2 Pratos do Dia abertos por jogador
     if (this.isDuel()) {
       this.duelPlates = new Map();
+      this.duelPassCount = new Map();
       activePlayers.forEach(p => {
         const plates = this.drawPile.splice(0, 2);
         this.duelPlates.set(p.userId, plates);
+        this.duelPassCount.set(p.userId, 0);
       });
     }
 
@@ -334,18 +338,18 @@ export class GameEngine {
     }
 
     this.consecutivePasses++;
+
+    // Duelo: contar passes individuais — 3 passes do mesmo jogador = derrota
+    const passCount = (this.duelPassCount.get(userId) ?? 0) + 1;
+    this.duelPassCount.set(userId, passCount);
+
     events.push({
       type: 'game:duel_plate_used',
-      payload: { userId, plateIndex, action, remainingPlates, drawnCard: action === 'insert' ? pickedPlate : null },
+      payload: { userId, plateIndex, action, remainingPlates, drawnCard: action === 'insert' ? pickedPlate : null, duelPassCount: passCount },
     });
 
-    const activePlayers = this.activePlayers();
-    if (this.consecutivePasses >= activePlayers.length - 1) {
-      if (this.pile.length === 0) {
-        return { success: true, events: [...events, ...this.resolveStalemate(activePlayers)] };
-      }
-      const wipeWinner = this.lastPlayerId ?? userId;
-      return { success: true, events: [...events, ...this.resolveWipe(wipeWinner)] };
+    if (passCount >= 3) {
+      return { success: true, events: [...events, ...this.resolveRoundEnd(userId)] };
     }
 
     this.advanceTurn();
