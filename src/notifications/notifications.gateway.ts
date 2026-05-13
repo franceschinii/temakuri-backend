@@ -216,7 +216,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.roomReadyMap.delete(data.roomCode);
     this.roomBots.delete(data.roomCode);
 
-    const updatedRoom = await this.roomsService.resetRoom(data.roomCode);
+    const updatedRoom = await this.roomsService.resetRoom(data.roomCode, client.userId);
     this.broadcastToRoom(data.roomCode, 'lobby:room_updated', { room: updatedRoom });
   }
 

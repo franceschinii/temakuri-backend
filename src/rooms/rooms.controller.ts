@@ -55,7 +55,7 @@ export class RoomsController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Reset room to WAITING state for a new game (host only)' })
-  resetRoom(@Param('code') code: string) {
-    return this.roomsService.resetRoom(code);
+  resetRoom(@CurrentUser('id') userId: string, @Param('code') code: string) {
+    return this.roomsService.resetRoom(code, userId);
   }
 }
