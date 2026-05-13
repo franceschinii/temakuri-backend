@@ -398,6 +398,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (engine.isGameOver()) {
       const rankings = result.events.find(e => e.type === 'game:game_over')?.payload?.['rankings'] as any[];
       if (rankings) {
+        this.clearTurnTimer(data.roomCode);
         this.roomsService.markFinished(data.roomCode, rankings.map(r => ({
           userId: r.userId,
           placement: r.placement,
@@ -593,6 +594,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         if (currentEngine.isGameOver()) {
           const rankings = result.events.find(e => e.type === 'game:game_over')?.payload?.['rankings'] as any[];
           if (rankings) {
+            this.clearTurnTimer(roomCode);
             this.roomsService.markFinished(roomCode, rankings.map(r => ({
               userId: r.userId,
               placement: r.placement,
