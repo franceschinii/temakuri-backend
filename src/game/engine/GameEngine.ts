@@ -622,6 +622,7 @@ export class GameEngine {
     }];
 
     if (winner && winner.tokensLeft === 0) {
+      winner.isEliminated = true;
       return [...events, ...this.resolveGameOver(winnerId)];
     }
 

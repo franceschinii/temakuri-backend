@@ -997,6 +997,25 @@ describe('GameEngine — tokens e eliminação', () => {
     const gameOverEvent = result.events.find(e => e.type === 'game:game_over');
     expect(gameOverEvent).toBeDefined();
   });
+
+  test('jogador eliminado por tokens=0 tem isEliminated=true no estado público', () => {
+    const { engine, ids } = makeEngine('TRADITIONAL', 4);
+    engine.startRound();
+    engine._setStateForTest({
+      tokens: { [ids[0]]: 2, [ids[1]]: 1, [ids[2]]: 2, [ids[3]]: 2 },
+      hands: {
+        [ids[0]]: [card(2, 'PIZZA', 'p1'), card(3, 'SUSHI', 's1')],
+        [ids[1]]: [card(5, 'SUSHI', 's2')],
+        [ids[2]]: [card(3, 'TACO', 't1'), card(4, 'TACO', 't2')],
+        [ids[3]]: [card(3, 'CURRY', 'c1'), card(4, 'CURRY', 'c2')],
+      },
+    });
+    engine.applyPlayCards(ids[0], [0]);
+    engine.applyPlayCards(ids[1], [0]); // esvazia mão → tokens 1→0
+    const state = engine.getClientStateFor(ids[0]);
+    const ids1Player = state.players.find(p => p.userId === ids[1])!;
+    expect(ids1Player.isEliminated).toBe(true);
+  });
 });
 
 // ─── GAME_OVER state shape ────────────────────────────────────────────────────
