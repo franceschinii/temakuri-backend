@@ -482,7 +482,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
           this.roomManager.destroy(data.roomCode);
           this.roomSockets.delete(data.roomCode);
           this.roomBots.delete(data.roomCode);
-        }, 5_000);
+        }, 300_000);
       }
     }
   }
@@ -678,13 +678,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
               this.roomManager.destroy(roomCode);
               this.roomSockets.delete(roomCode);
               this.roomBots.delete(roomCode);
-            }, 5_000);
+            }, 300_000);
           }
         } else {
           this.scheduleBotMoveIfNeeded(roomCode, currentEngine);
         }
       }
-    }, 900);
+    }, 900); // bot age rapido; frontend que segura turn_started para visualizar
   }
 
   private async applyRankedAbandonmentIfNeeded(userId: string, roomCode: string) {
@@ -1026,7 +1026,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
               this.roomManager.destroy(roomCode);
               this.roomSockets.delete(roomCode);
               this.roomBots.delete(roomCode);
-            }, 5_000);
+            }, 300_000);
           }
         }
       }
