@@ -146,7 +146,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   @SubscribeMessage('lobby:join_room')
-  async handleJoinRoom(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string }) {
+  async handleJoinRoom(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; password?: string }) {
     if (!client.userId) throw new WsException('Unauthorized');
 
     // Bloquear se o userId já está em outra sala com qualquer outro socket
@@ -164,7 +164,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
 
     try {
-      const room = await this.roomsService.joinRoom(client.userId, data.roomCode);
+      const room = await this.roomsService.joinRoom(client.userId, data.roomCode, data.password);
       client.roomCode = data.roomCode;
 
       if (!this.roomSockets.has(data.roomCode)) {
