@@ -540,7 +540,7 @@ describe('anti-fraude', () => {
     expect(engine.isGameOver()).toBe(false);
   });
 
-  test('picCardIndex fora do range da pilha é rejeitado', () => {
+  test('insertAtIndex fora do range da mão é rejeitado', () => {
     const { engine, ids } = makeEngine('TRADITIONAL', 2);
     engine.startRound();
     // ids[0] tem 2 cartas (não esvazia a mão ao jogar), ids[1] tem 1 carta
