@@ -49,6 +49,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   // Matchmaking em formacao: roomCode → { players, timeout, isRanked }
   // Permite cancelar a sala se um jogador desconecta durante a janela de confirmacao.
   private pendingMatches = new Map<string, { players: QueueEntry[]; isRanked: boolean; confirmTimer: NodeJS.Timeout | null }>();
+  // Cleanup tardio de guests que perderam todas as sockets (closed tab, etc).
+  // Roda 30s depois de zero-sockets — se o user reconectar nesse meio tempo
+  // o timer é cancelado, mantendo o username dele em jogo. Sem isso, guests
+  // que fecham a aba durante a partida ficam com o username preso até o
+  // cleanupStaleRooms varrer (1h+).
+  private guestCleanupTimers = new Map<string, NodeJS.Timeout>();
+  private static readonly GUEST_CLEANUP_DELAY_MS = 30_000;
 
   // Throttle do presence:count para nao spammar broadcasts em rajadas de
   // connect/disconnect. Emite no maximo 1 vez por segundo.
@@ -106,6 +113,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       client.userId = userId;
       client.username = payload.username;
 
+      // Reconectou dentro da janela de cleanup → cancela a remoção pendente.
+      const pendingCleanup = this.guestCleanupTimers.get(userId);
+      if (pendingCleanup) {
+        clearTimeout(pendingCleanup);
+        this.guestCleanupTimers.delete(userId);
+      }
+
       const isFirstSocketForUser = !this.userSockets.has(userId);
       if (isFirstSocketForUser) {
         this.userSockets.set(userId, new Set());
@@ -157,6 +171,10 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         this.events.emit('matchmaking.user_disconnected', { userId: client.userId });
         // Decrementa o contador global agora que o user saiu de fato.
         this.schedulePresenceBroadcast();
+        // Agenda cleanup de guest sem sockets — se reconectar em 30s, cancela.
+        // Isso libera o username de convidados que fecharam a aba durante o
+        // jogo (handleDisconnect mantém o user vivo pra permitir reconexão).
+        this.scheduleGuestCleanup(client.userId);
       }
     }
 
@@ -1130,6 +1148,31 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   private clearTurnTimer(roomCode: string) {
     const t = this.turnTimers.get(roomCode);
     if (t) { clearTimeout(t); this.turnTimers.delete(roomCode); }
+  }
+
+  /**
+   * Agenda exclusão de um user efêmero (guest) que perdeu todas as sockets.
+   * Se o user reconectar antes do timer, handleConnection cancela.
+   * Roda em background — se o user não for guest, deleteGuestIfOrphan
+   * (que já checa isGuest) faz nada.
+   */
+  private scheduleGuestCleanup(userId: string) {
+    // Cancela timer antigo se houver (defensive — userSockets.size==0 já
+    // implica não há sockets, mas múltiplos handleDisconnect podem chegar).
+    const existing = this.guestCleanupTimers.get(userId);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(async () => {
+      this.guestCleanupTimers.delete(userId);
+      // Se o user reconectou enquanto isso, userSockets terá entrada de novo —
+      // não deleta. Checagem extra de segurança.
+      if (this.userSockets.has(userId)) return;
+      // forceDeleteGuest valida isGuest e remove RoomPlayer + User mesmo
+      // que ele ainda esteja numa sala em curso (libera o username).
+      await this.roomsService.forceDeleteGuest(userId).catch(() => {});
+    }, NotificationsGateway.GUEST_CLEANUP_DELAY_MS);
+
+    this.guestCleanupTimers.set(userId, timer);
   }
 
   private broadcastToRoomExcept(roomCode: string, excludeClient: AuthenticatedSocket, event: string, payload: unknown) {

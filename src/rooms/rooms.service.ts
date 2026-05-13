@@ -708,6 +708,27 @@ export class RoomsService {
     await this.deleteEphemeralUsers([userId]);
   }
 
+  /**
+   * Versão agressiva do cleanup: deleta guest mesmo se ainda tem RoomPlayer
+   * ativo (caso típico: convidado fechou a aba durante uma partida em curso).
+   * Remove os RoomPlayer dele primeiro pra liberar o seat, depois o User —
+   * o que automaticamente libera o username pra próximo convidado usar.
+   *
+   * Engine em memória ainda tem o PlayerState desse user, mas como o socket
+   * sumiu há tempo (>= GUEST_CLEANUP_DELAY_MS), faz sentido considerar
+   * abandonado. Bot scheduler segue o jogo; quando match termina, engine
+   * é destruído normalmente.
+   */
+  async forceDeleteGuest(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { isGuest: true },
+    });
+    if (!user?.isGuest) return;
+    await this.prisma.roomPlayer.deleteMany({ where: { userId } });
+    await this.deleteEphemeralUsers([userId]);
+  }
+
   protected async deleteEphemeralUsers(ids: string[]) {
     if (ids.length === 0) return;
     await this.prisma.gameResult.deleteMany({ where: { userId: { in: ids } } });
