@@ -487,12 +487,18 @@ export class RoomsService {
     const ephemeralIds = new Set(
       room.players.filter(p => p.user?.isBot || p.user?.isGuest).map(p => p.userId),
     );
+    // Players que ainda estao na sala no momento do fim do jogo (nao saiu via
+    // leaveRoom). Quem abandonou nao deve receber XP nem moedas — placement
+    // gerado pelo engine ainda inclui esses ids, mas filtramos aqui na
+    // distribuicao de recompensas.
+    const stillInRoom = new Set(room.players.map(p => p.userId));
 
     const totalPlayers = results.length;
     const rewards: Record<string, { xpEarned: number; coinsEarned: number; newLevel: number; leveledUp: boolean; pdsChange: number; newPds: number; newRank: string }> = {};
 
     for (const r of results) {
       if (ephemeralIds.has(r.userId)) continue;
+      if (!stillInRoom.has(r.userId)) continue;
 
       const earned = xpGain(r.placement, totalPlayers);
       const coins = coinsGain(r.placement, totalPlayers);
