@@ -57,6 +57,7 @@ export class PaymentsService {
 
     const urls = this.getBaseUrls();
     const externalReference = `user:${userId}|sku:${sku}`;
+    const payerName = user.username ?? 'Comprador';
 
     try {
       const result = await this.mp.preference.create({
@@ -65,12 +66,20 @@ export class PaymentsService {
             {
               id: sku,
               title: pack.title,
+              description: `${pack.diamonds} diamantes Temakuri para uso no jogo`,
+              category_id: 'virtual_goods',
               quantity: 1,
               unit_price: pack.priceBrl,
               currency_id: 'BRL',
             },
           ],
-          payer: user.email ? { email: user.email } : undefined,
+          payer: user.email
+            ? {
+                email: user.email,
+                first_name: payerName,
+                last_name: 'Temakuri',
+              }
+            : undefined,
           back_urls: {
             success: urls.success,
             failure: urls.failure,
@@ -80,6 +89,7 @@ export class PaymentsService {
           external_reference: externalReference,
           notification_url: urls.notification,
           statement_descriptor: 'TEMAKURI',
+          binary_mode: true,
           metadata: { userId, sku, diamonds: pack.diamonds },
         },
       });
