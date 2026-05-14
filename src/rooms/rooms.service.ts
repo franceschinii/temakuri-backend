@@ -450,6 +450,7 @@ export class RoomsService {
   async markFinished(
     code: string,
     results: { userId: string; placement: number; tokensLeft: number }[],
+    gameStats?: { saborTriggers: number; tricksWon: Record<string, number> },
   ): Promise<Record<string, { xpEarned: number; coinsEarned: number; newLevel: number; leveledUp: boolean; pdsChange: number; newPds: number; newRank: string }>> {
     // Idempotência: se room já está FINISHED, retorna sem reprocessar
     const existing = await this.prisma.room.findUnique({
@@ -525,16 +526,27 @@ export class RoomsService {
           },
         });
 
+        // Stats vindos do engine: tricksWon por player (vaza ganha = wipe) e
+        // saborTriggers do jogo todo. Quem ativou ganha o credito; como o engine
+        // hoje so guarda total agregado, atribuimos ao vencedor (placement 1).
+        // Em jogos sem vencedor unico, o credito do sabor cai no primeiro lugar
+        // — solucao simples sem mudar o engine.
+        const tricksWonByMe = gameStats?.tricksWon?.[r.userId] ?? 0;
+        const saborGainedByMe = r.placement === 1 ? (gameStats?.saborTriggers ?? 0) : 0;
         await tx.userStats.upsert({
           where: { userId: r.userId },
           create: {
             userId: r.userId,
             gamesPlayed: 1,
             gamesWon: r.placement === 1 ? 1 : 0,
+            tricksWon: tricksWonByMe,
+            saborTriggers: saborGainedByMe,
           },
           update: {
             gamesPlayed: { increment: 1 },
             gamesWon: { increment: r.placement === 1 ? 1 : 0 },
+            tricksWon: { increment: tricksWonByMe },
+            saborTriggers: { increment: saborGainedByMe },
           },
         });
 

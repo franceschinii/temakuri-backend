@@ -465,14 +465,16 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.scheduleBotMoveIfNeeded(data.roomCode, engine);
 
     if (engine.isGameOver()) {
-      const rankings = result.events.find(e => e.type === 'game:game_over')?.payload?.['rankings'] as any[];
+      const gameOverPayload = result.events.find(e => e.type === 'game:game_over')?.payload;
+      const rankings = gameOverPayload?.['rankings'] as any[];
+      const gameStats = gameOverPayload?.['stats'] as { saborTriggers: number; tricksWon: Record<string, number> } | undefined;
       if (rankings) {
         this.clearTurnTimer(data.roomCode);
         this.roomsService.markFinished(data.roomCode, rankings.map(r => ({
           userId: r.userId,
           placement: r.placement,
           tokensLeft: r.tokensLeft,
-        }))).then(async (rewards) => {
+        })), gameStats).then(async (rewards) => {
           const updatedRoom = await this.roomsService.findByCode(data.roomCode).catch(() => null);
           if (updatedRoom) {
             this.broadcastToRoom(data.roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
@@ -661,14 +663,16 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       if (result.success) {
         this.dispatchEvents(roomCode, result.events);
         if (currentEngine.isGameOver()) {
-          const rankings = result.events.find(e => e.type === 'game:game_over')?.payload?.['rankings'] as any[];
+          const gameOverPayload = result.events.find(e => e.type === 'game:game_over')?.payload;
+          const rankings = gameOverPayload?.['rankings'] as any[];
+          const gameStats = gameOverPayload?.['stats'] as { saborTriggers: number; tricksWon: Record<string, number> } | undefined;
           if (rankings) {
             this.clearTurnTimer(roomCode);
             this.roomsService.markFinished(roomCode, rankings.map(r => ({
               userId: r.userId,
               placement: r.placement,
               tokensLeft: r.tokensLeft,
-            }))).then(async (rewards) => {
+            })), gameStats).then(async (rewards) => {
               const updatedRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
               if (updatedRoom) {
                 this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
@@ -1014,9 +1018,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         this.dispatchEvents(roomCode, result.events);
         this.scheduleBotMoveIfNeeded(roomCode, engine);
         if (engine.isGameOver()) {
-          const rankings = result.events.find(e => e.type === 'game:game_over')?.payload?.['rankings'] as any[];
+          const gameOverPayload = result.events.find(e => e.type === 'game:game_over')?.payload;
+          const rankings = gameOverPayload?.['rankings'] as any[];
+          const gameStats = gameOverPayload?.['stats'] as { saborTriggers: number; tricksWon: Record<string, number> } | undefined;
           if (rankings) {
-            this.roomsService.markFinished(roomCode, rankings.map(r => ({ userId: r.userId, placement: r.placement, tokensLeft: r.tokensLeft }))).then(async (rewards) => {
+            this.roomsService.markFinished(roomCode, rankings.map(r => ({ userId: r.userId, placement: r.placement, tokensLeft: r.tokensLeft })), gameStats).then(async (rewards) => {
               const updatedRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
               if (updatedRoom) {
                 this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
