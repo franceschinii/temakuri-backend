@@ -27,18 +27,22 @@ const AVATAR_NAMES: Record<number, string> = {
 const ALL_AVATARS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 const PURCHASABLE_MODES = ['MERCADO', 'RODIZIO', 'DEGUSTACAO'];
 
-// Temas de mesa — pagaveis em diamantes
+// Temas de mesa. Bambu Verde e o tema padrao gratuito (preco 0,
+// automaticamente "owned" por todos). Demais sao comprados em diamantes.
 const THEME_PRICES: Record<string, number> = {
-  bambu: 50,
+  bambu: 0,
+  oceano: 50,
   sakura: 100,
   oni: 150,
 };
 const THEME_NAMES: Record<string, string> = {
   bambu: 'Bambu Verde',
+  oceano: 'Oceano',
   sakura: 'Sakura',
   oni: 'Oni',
 };
-const ALL_THEMES = ['bambu', 'sakura', 'oni'];
+const FREE_THEMES = new Set(['bambu']);
+const ALL_THEMES = ['bambu', 'oceano', 'sakura', 'oni'];
 
 // Pacotes de coins comprados com diamantes
 const COIN_PACKS: Record<string, { coins: number; diamonds: number }> = {
@@ -100,14 +104,19 @@ export class ShopService {
       owned: inv.unlockedModes.includes(mode),
     }));
 
-    const themes = ALL_THEMES.map(key => ({
-      type: 'theme' as const,
-      key,
-      name: THEME_NAMES[key] ?? key,
-      price: THEME_PRICES[key] ?? 0,
-      currency: 'diamonds' as const,
-      owned: inv.unlockedThemes.includes(key),
-    }));
+    const themes = ALL_THEMES.map(key => {
+      const isFree = FREE_THEMES.has(key);
+      return {
+        type: 'theme' as const,
+        key,
+        name: THEME_NAMES[key] ?? key,
+        price: THEME_PRICES[key] ?? 0,
+        currency: 'diamonds' as const,
+        // Temas gratuitos sao desbloqueados automaticamente para todos.
+        owned: isFree || inv.unlockedThemes.includes(key),
+        free: isFree,
+      };
+    });
 
     const coinPacks = Object.entries(COIN_PACKS).map(([sku, p]) => ({
       type: 'coin_pack' as const,
@@ -240,6 +249,9 @@ export class ShopService {
   }
 
   async purchaseTheme(userId: string, themeKey: string) {
+    if (FREE_THEMES.has(themeKey)) {
+      throw new BadRequestException('Tema gratuito não precisa ser comprado');
+    }
     if (!THEME_PRICES[themeKey]) {
       throw new BadRequestException('Tema não disponível para compra');
     }
@@ -282,9 +294,11 @@ export class ShopService {
       if (!ALL_THEMES.includes(themeKey)) {
         throw new BadRequestException('Tema inválido');
       }
-      const inv = await this.getOrCreateInventory(userId);
-      if (!inv.unlockedThemes.includes(themeKey)) {
-        throw new ForbiddenException('Tema não desbloqueado');
+      if (!FREE_THEMES.has(themeKey)) {
+        const inv = await this.getOrCreateInventory(userId);
+        if (!inv.unlockedThemes.includes(themeKey)) {
+          throw new ForbiddenException('Tema não desbloqueado');
+        }
       }
     }
     await this.prisma.user.update({
