@@ -45,6 +45,7 @@ export class GameEngine {
   private saborMinRequired = 0;
   private consecutivePasses = 0;
   private lastWiperId: string | null = null;
+  private lastRoundWinnerId: string | null = null;
   private lastPlayerId: string | null = null;
   private mode: GameMode;
   private roomCode: string;
@@ -172,11 +173,19 @@ export class GameEngine {
       });
     }
 
-    if (this.lastWiperId) {
+    // Prioridade: quem ganhou a rodada anterior comeca a proxima. Se nao
+    // ha (primeira rodada do jogo), sorteia jogador inicial aleatorio.
+    // lastWiperId so e usado como fallback intermediario (raro, mas mantemos
+    // por seguranca caso resolveRoundEnd nao seja chamado).
+    if (this.lastRoundWinnerId) {
+      const idx = activePlayers.findIndex(p => p.userId === this.lastRoundWinnerId);
+      this.currentTurnIndex = idx !== -1 ? idx : 0;
+    } else if (this.lastWiperId) {
       const idx = activePlayers.findIndex(p => p.userId === this.lastWiperId);
-      if (idx !== -1) this.currentTurnIndex = idx;
+      this.currentTurnIndex = idx !== -1 ? idx : 0;
     } else {
-      this.currentTurnIndex = 0;
+      // Primeira rodada: sorteio aleatorio entre os ativos.
+      this.currentTurnIndex = Math.floor(Math.random() * activePlayers.length);
     }
 
     this.phase = 'PLAYER_TURN';
@@ -725,6 +734,8 @@ export class GameEngine {
       this.rotateHands();
     }
 
+    // Vencedor da rodada inicia a proxima (consumido por startRound()).
+    this.lastRoundWinnerId = winnerId;
     this.lastWiperId = null;
     return [...events, ...this.startRound()];
   }
