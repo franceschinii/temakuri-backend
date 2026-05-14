@@ -131,28 +131,34 @@ export class PaymentsService {
     const planId = process.env.MP_PREAPPROVAL_PLAN_ID_PREMIUM;
     const externalReference = `user:${userId}`;
 
+    // Com preapproval_plan_id, o checkout de assinatura do MP nao aceita
+    // criacao via POST /preapproval sem card_token_id. O fluxo correto e
+    // redirecionar o usuario direto para /subscriptions/checkout, onde o
+    // proprio MP cria a preapproval ao receber os dados do cartao.
+    if (planId) {
+      const checkoutUrl = new URL('https://www.mercadopago.com.br/subscriptions/checkout');
+      checkoutUrl.searchParams.set('preapproval_plan_id', planId);
+      checkoutUrl.searchParams.set('external_reference', externalReference);
+      checkoutUrl.searchParams.set('back_url', urls.success);
+      return { url: checkoutUrl.toString() };
+    }
+
     try {
+      // Fallback (sem plano pre-cadastrado): cria preapproval avulsa via API.
+      // Funciona porque sem preapproval_plan_id o MP aceita auto_recurring
+      // inline e gera init_point sem exigir card_token_id.
       const body: any = {
         payer_email: user.email,
         back_url: urls.success,
         external_reference: externalReference,
         reason: PREMIUM_MONTHLY.reason,
-        // status pending permite criar a preapproval sem card_token_id;
-        // o pagador cadastra o cartao na tela do MP via init_point.
-        status: 'pending',
-      };
-
-      if (planId) {
-        body.preapproval_plan_id = planId;
-      } else {
-        // Fallback: cria assinatura sem plano pre-cadastrado.
-        body.auto_recurring = {
+        auto_recurring: {
           frequency: 1,
           frequency_type: 'months',
           transaction_amount: PREMIUM_MONTHLY.priceBrl,
           currency_id: 'BRL',
-        };
-      }
+        },
+      };
 
       const result = await this.mp.preapproval.create({ body });
 
