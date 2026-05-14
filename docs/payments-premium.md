@@ -143,22 +143,24 @@ Mapeamento SKU → `stripePriceId` vem de `process.env`.
 
 ### Catálogo de gasto de diamantes (no `ShopService`)
 
+Preços calibrados pra ficarem **abaixo da metade** do pack `DIAMONDS_100` (50 💎) em itens básicos.
+
 | SKU | Preço (💎) | Tipo |
 |---|---|---|
-| `PREMIUM_AVATAR_9` (Yokai) | 80 | avatar premium |
-| `PREMIUM_AVATAR_10` (Kitsune) | 80 | avatar premium |
-| `PREMIUM_AVATAR_11` (Tanuki) | 80 | avatar premium |
-| `PREMIUM_AVATAR_12` (Geisha) | 200 | avatar premium |
-| `PREMIUM_AVATAR_13` (Samurai) | 200 | avatar premium |
-| `PREMIUM_AVATAR_14` (Dragão Dourado) | 800 | avatar premium |
-| `THEME_BAMBU` | 150 | tema mesa |
-| `THEME_SAKURA` | 250 | tema mesa |
-| `THEME_ONI` | 400 | tema mesa |
-| `RESET_RANKED_WARNINGS` | 50 | utilitário |
-| `RESET_LOSS_STREAK` | 30 | utilitário |
-| `COIN_PACK_50` | 10 → +50 coins | conversão |
-| `COIN_PACK_200` | 30 → +200 coins | conversão |
-| `COIN_PACK_700` | 80 → +700 coins | conversão |
+| `PREMIUM_AVATAR_9` (Yokai) | 30 | avatar premium |
+| `PREMIUM_AVATAR_10` (Kitsune) | 30 | avatar premium |
+| `PREMIUM_AVATAR_11` (Tanuki) | 30 | avatar premium |
+| `PREMIUM_AVATAR_12` (Geisha) | 80 | avatar premium |
+| `PREMIUM_AVATAR_13` (Samurai) | 80 | avatar premium |
+| `PREMIUM_AVATAR_14` (Dragão Dourado) | 300 | avatar premium |
+| `THEME_BAMBU` | 50 | tema mesa |
+| `THEME_SAKURA` | 100 | tema mesa |
+| `THEME_ONI` | 150 | tema mesa |
+| `RESET_RANKED_WARNINGS` | 20 | utilitário |
+| `RESET_LOSS_STREAK` | 10 | utilitário |
+| `COIN_PACK_50` | 5 → +50 coins | conversão |
+| `COIN_PACK_200` | 15 → +200 coins | conversão |
+| `COIN_PACK_700` | 40 → +700 coins | conversão |
 
 ---
 
