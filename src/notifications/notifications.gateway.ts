@@ -44,6 +44,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   // Permite cancelar a sala se um jogador desconecta durante a janela de confirmacao.
   private pendingMatches = new Map<string, { players: QueueEntry[]; isRanked: boolean; confirmTimer: NodeJS.Timeout | null }>();
 
+  // Throttle do presence:count para nao spammar broadcasts em rajadas de
+  // connect/disconnect. Emite no maximo 1 vez por segundo.
+  private presenceThrottle: NodeJS.Timeout | null = null;
+  private lastPresenceSentCount = -1;
+
   constructor(
     private jwt: JwtService,
     private config: ConfigService,
@@ -84,13 +89,43 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       client.userId = userId;
       client.username = payload.username;
 
-      if (!this.userSockets.has(userId)) {
+      const isFirstSocketForUser = !this.userSockets.has(userId);
+      if (isFirstSocketForUser) {
         this.userSockets.set(userId, new Set());
       }
       this.userSockets.get(userId)!.add(client);
+
+      // Envia valor atual direto pra esse cliente; broadcast geral se foi
+      // novo usuario online (nao apenas reconexao adicional do mesmo user).
+      this.sendToClient(client, 'presence:count', { online: this.userSockets.size });
+      if (isFirstSocketForUser) {
+        this.schedulePresenceBroadcast();
+      }
     } catch {
       client.close(4001, 'Invalid token');
     }
+  }
+
+  /**
+   * Agenda broadcast de presence:count. Throttle de 1s pra evitar storm
+   * em refresh em massa ou reconexoes simultaneas.
+   */
+  private schedulePresenceBroadcast() {
+    if (this.presenceThrottle) return;
+    this.presenceThrottle = setTimeout(() => {
+      this.presenceThrottle = null;
+      const count = this.userSockets.size;
+      if (count === this.lastPresenceSentCount) return;
+      this.lastPresenceSentCount = count;
+      this.broadcastAll('presence:count', { online: count });
+    }, 1000);
+  }
+
+  private broadcastAll(event: string, payload: any) {
+    const msg = JSON.stringify({ event, data: payload });
+    this.server.clients.forEach((ws: AuthenticatedSocket) => {
+      if (ws.userId && ws.readyState === ws.OPEN) ws.send(msg);
+    });
   }
 
   handleDisconnect(client: AuthenticatedSocket) {
@@ -103,6 +138,8 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         this.userSockets.delete(client.userId);
         // Only remove from matchmaking queue when the user has no remaining sockets
         this.events.emit('matchmaking.user_disconnected', { userId: client.userId });
+        // Decrementa o contador global agora que o user saiu de fato.
+        this.schedulePresenceBroadcast();
       }
     }
 
