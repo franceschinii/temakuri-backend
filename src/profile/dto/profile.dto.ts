@@ -12,7 +12,7 @@ export class UpdateProfileDto {
   @ApiPropertyOptional()
   @IsInt()
   @Min(0)
-  @Max(11)
+  @Max(14)
   @IsOptional()
   avatarIndex?: number;
 }

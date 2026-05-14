@@ -27,14 +27,14 @@ export class ShopController {
     return this.shopService.purchaseMode(req.user.id, mode.toUpperCase());
   }
 
-  @Post('theme/:key')
-  purchaseTheme(@Request() req: any, @Param('key') key: string) {
-    return this.shopService.purchaseTheme(req.user.id, key.toLowerCase());
-  }
-
   @Post('theme/active')
   setActiveTheme(@Request() req: any, @Body() body: { theme: string | null }) {
     return this.shopService.setActiveTheme(req.user.id, body?.theme ?? null);
+  }
+
+  @Post('theme/:key')
+  purchaseTheme(@Request() req: any, @Param('key') key: string) {
+    return this.shopService.purchaseTheme(req.user.id, key.toLowerCase());
   }
 
   @Post('coin-pack/:sku')
