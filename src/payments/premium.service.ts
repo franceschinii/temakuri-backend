@@ -1,19 +1,25 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import type { Stripe } from 'stripe/cjs/stripe.core.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PREMIUM_MONTHLY } from './catalog.js';
 
 /**
- * Gerencia o ciclo de vida das assinaturas Premium:
- * - Cron diario expira premiums vencidos (User.isPremium = false).
- * - Webhook handlers atualizam User.premiumExpiresAt e creditam
- *   diamantes mensais via DiamondTransaction (idempotente por
- *   stripeInvoiceId).
+ * Gerencia ciclo de vida das assinaturas Premium via Mercado Pago.
  *
- * O grant de diamantes acontece a cada invoice.paid (Stripe garante
- * exatamente uma invoice por periodo de cobranca), nao por cron — assim
- * nao corremos risco de creditar duas vezes.
+ * Conceitos MP:
+ * - preapproval: a assinatura em si (status authorized/paused/cancelled).
+ * - authorized_payment: cada cobranca mensal individual da preapproval.
+ *
+ * Fluxo:
+ * 1. Usuario aceita assinatura -> webhook "subscription_preapproval"
+ *    com status=authorized -> registra PremiumSubscription.
+ * 2. MP cobra mensalmente -> webhook "subscription_authorized_payment"
+ *    com status=approved -> estende premiumExpiresAt + credita 50
+ *    diamantes (idempotente por externalInvoiceId).
+ * 3. Cancelamento -> webhook preapproval com status=cancelled -> marca
+ *    CANCELLED. User segue Premium ate premiumExpiresAt vencer (cron).
+ *
+ * Cron diario expira premiums vencidos.
  */
 @Injectable()
 export class PremiumService {
@@ -40,108 +46,127 @@ export class PremiumService {
   }
 
   /**
-   * Handler de checkout.session.completed para mode=subscription.
-   * Stripe cria a Subscription e dispara este evento + invoice.paid.
-   * Aqui apenas registramos a Subscription; o credito de diamantes vem
-   * em handleInvoicePaid.
+   * Processa notificacao de preapproval (assinatura criada/atualizada).
+   * Recebe o objeto preapproval ja resolvido do MP.
+   *
+   * status possiveis: authorized | paused | cancelled | pending
    */
-  async handleSubscriptionCreated(session: Stripe.Checkout.Session) {
-    const userId = session.client_reference_id;
-    const subscriptionId = typeof session.subscription === 'string'
-      ? session.subscription
-      : session.subscription?.id;
-    const customerId = typeof session.customer === 'string'
-      ? session.customer
-      : session.customer?.id;
-    if (!userId || !subscriptionId || !customerId) {
-      this.logger.warn(`handleSubscriptionCreated: campos faltando — userId=${userId} sub=${subscriptionId} cust=${customerId}`);
+  async handlePreapprovalNotification(preapproval: any) {
+    const preapprovalId = String(preapproval.id);
+    const externalRef = preapproval.external_reference as string | undefined;
+    const status = preapproval.status as string;
+    const payerEmail = preapproval.payer_email as string | undefined;
+    const payerId = preapproval.payer_id ? String(preapproval.payer_id) : undefined;
+
+    // external_reference formato "user:<userId>"
+    const userId = externalRef?.match(/^user:(.+)$/)?.[1];
+    if (!userId) {
+      this.logger.warn(`Preapproval ${preapprovalId} sem external_reference valido (${externalRef}).`);
       return;
     }
-    // Salva stripeCustomerId no User (idempotente).
-    await this.prisma.user.update({
+
+    const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      data: { stripeCustomerId: customerId },
+      select: { id: true, username: true },
     });
+    if (!user) {
+      this.logger.warn(`User ${userId} nao encontrado para preapproval ${preapprovalId}.`);
+      return;
+    }
+
+    if (payerId) {
+      // Mapeia para externalCustomerId so na primeira vez.
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { externalCustomerId: payerId },
+      }).catch(() => {
+        // Pode falhar por @unique se outro user ja usa o mesmo payerId.
+        // Nao bloqueia o fluxo.
+      });
+    }
+
+    // expiresAt: tenta extrair de next_payment_date; se faltar, deixa nulo
+    // (vai ser preenchido no proximo authorized_payment).
+    const nextPayment = preapproval.next_payment_date ? new Date(preapproval.next_payment_date) : null;
+    const dbStatus = status === 'authorized' ? 'ACTIVE'
+      : status === 'cancelled' ? 'CANCELLED'
+      : status === 'paused' ? 'PAST_DUE'
+      : 'ACTIVE';
+
+    await this.prisma.premiumSubscription.upsert({
+      where: { externalSubscriptionId: preapprovalId },
+      create: {
+        userId,
+        status: dbStatus,
+        expiresAt: nextPayment ?? new Date(Date.now() + 31 * 24 * 60 * 60 * 1000),
+        cancelAtPeriodEnd: status === 'cancelled',
+        externalSubscriptionId: preapprovalId,
+        externalCustomerId: payerId ?? payerEmail ?? 'unknown',
+      },
+      update: {
+        status: dbStatus,
+        cancelAtPeriodEnd: status === 'cancelled',
+        ...(nextPayment ? { expiresAt: nextPayment } : {}),
+      },
+    });
+
+    this.logger.log(`Preapproval ${preapprovalId} (user ${userId}) status=${status} -> ${dbStatus}`);
   }
 
   /**
-   * Handler de invoice.paid — chamado na primeira fatura e em cada
-   * renovacao mensal. Estende premiumExpiresAt, credita 50 diamantes
-   * (idempotente via stripeInvoiceId unique).
+   * Processa cobranca mensal aprovada (authorized_payment). Estende
+   * premiumExpiresAt e credita 50 diamantes. Idempotente via
+   * externalInvoiceId @unique.
    */
-  async handleInvoicePaid(invoice: Stripe.Invoice, stripe: Stripe) {
-    const invoiceId = invoice.id;
-    if (!invoiceId) {
-      this.logger.warn('handleInvoicePaid: invoice sem id');
+  async handleAuthorizedPayment(authorizedPayment: any) {
+    const apId = String(authorizedPayment.id);
+    const status = authorizedPayment.status as string;
+    const preapprovalId = authorizedPayment.preapproval_id ? String(authorizedPayment.preapproval_id) : undefined;
+
+    if (status !== 'approved' && status !== 'processed') {
+      this.logger.debug(`AuthorizedPayment ${apId} status=${status}, ignorando.`);
       return;
     }
-    // Idempotencia: se ja temos DiamondTransaction com este stripeInvoiceId,
-    // ja processamos esta cobranca.
+    if (!preapprovalId) {
+      this.logger.warn(`AuthorizedPayment ${apId} sem preapproval_id.`);
+      return;
+    }
+
+    const sub = await this.prisma.premiumSubscription.findUnique({
+      where: { externalSubscriptionId: preapprovalId },
+    });
+    if (!sub) {
+      this.logger.warn(`PremiumSubscription nao encontrada para preapproval ${preapprovalId}.`);
+      return;
+    }
+
     const existing = await this.prisma.diamondTransaction.findUnique({
-      where: { stripeInvoiceId: invoiceId },
+      where: { externalInvoiceId: apId },
     });
     if (existing) {
-      this.logger.debug(`Invoice ${invoiceId} ja processada, pulando.`);
+      this.logger.debug(`AuthorizedPayment ${apId} ja processada, pulando.`);
       return;
     }
 
-    // Obtem subscription para extrair user_id e periodo
-    // (invoice.subscription_details.subscription pode ser string)
-    const subId = (invoice as any).subscription as string | undefined;
-    if (!subId) {
-      this.logger.warn(`Invoice ${invoiceId} sem subscription, pulando.`);
-      return;
-    }
-    const subscription = await stripe.subscriptions.retrieve(subId);
-    const customerId = typeof subscription.customer === 'string'
-      ? subscription.customer
-      : subscription.customer.id;
-    const user = await this.prisma.user.findFirst({
-      where: { stripeCustomerId: customerId },
-    });
-    if (!user) {
-      this.logger.warn(`Nenhum user para customer ${customerId}, pulando invoice ${invoiceId}.`);
-      return;
-    }
-
-    // current_period_end existe em subscription items
-    const item = subscription.items.data[0];
-    const periodEndUnix = item?.current_period_end ?? subscription.billing_cycle_anchor;
-    const expiresAt = new Date(periodEndUnix * 1000);
-
-    // Atualiza ou cria PremiumSubscription
-    await this.prisma.premiumSubscription.upsert({
-      where: { stripeSubscriptionId: subscription.id },
-      create: {
-        userId: user.id,
-        status: 'ACTIVE',
-        expiresAt,
-        cancelAtPeriodEnd: subscription.cancel_at_period_end,
-        stripeSubscriptionId: subscription.id,
-        stripeCustomerId: customerId,
-      },
-      update: {
-        status: 'ACTIVE',
-        expiresAt,
-        cancelAtPeriodEnd: subscription.cancel_at_period_end,
-      },
-    });
-
-    // Credita diamantes mensais + atualiza user em transacao atomica
+    // Estende 31 dias a partir de agora (mensal). MP nao informa o periodo
+    // exato no authorized_payment; o handlePreapprovalNotification depois
+    // ajusta para next_payment_date se necessario.
     const now = new Date();
+    const expiresAt = new Date(now.getTime() + 31 * 24 * 60 * 60 * 1000);
+
     await this.prisma.$transaction([
       this.prisma.diamondTransaction.create({
         data: {
-          userId: user.id,
+          userId: sub.userId,
           type: 'PREMIUM_GRANT',
           amount: PREMIUM_MONTHLY.diamondsPerMonth,
           description: 'Grant mensal Premium',
-          stripeInvoiceId: invoiceId,
+          externalInvoiceId: apId,
           sku: 'PREMIUM_MONTHLY',
         },
       }),
       this.prisma.user.update({
-        where: { id: user.id },
+        where: { id: sub.userId },
         data: {
           isPremium: true,
           premiumExpiresAt: expiresAt,
@@ -149,39 +174,12 @@ export class PremiumService {
           diamonds: { increment: PREMIUM_MONTHLY.diamondsPerMonth },
         },
       }),
+      this.prisma.premiumSubscription.update({
+        where: { id: sub.id },
+        data: { status: 'ACTIVE', expiresAt },
+      }),
     ]);
 
-    this.logger.log(`Premium renovado para ${user.username}, expira ${expiresAt.toISOString()}`);
-  }
-
-  /**
-   * Handler de customer.subscription.updated — sincroniza cancel_at_period_end
-   * e status. Nao mexe em isPremium aqui (o cron faz isso quando vencer).
-   */
-  async handleSubscriptionUpdated(subscription: Stripe.Subscription) {
-    const sub = await this.prisma.premiumSubscription.findUnique({
-      where: { stripeSubscriptionId: subscription.id },
-    });
-    if (!sub) return;
-    const item = subscription.items.data[0];
-    const periodEndUnix = item?.current_period_end ?? subscription.billing_cycle_anchor;
-    await this.prisma.premiumSubscription.update({
-      where: { stripeSubscriptionId: subscription.id },
-      data: {
-        cancelAtPeriodEnd: subscription.cancel_at_period_end,
-        expiresAt: new Date(periodEndUnix * 1000),
-      },
-    });
-  }
-
-  /**
-   * Handler de customer.subscription.deleted — marca cancelada. O User
-   * continua isPremium=true ate premiumExpiresAt passar (proximo cron).
-   */
-  async handleSubscriptionDeleted(subscription: Stripe.Subscription) {
-    await this.prisma.premiumSubscription.updateMany({
-      where: { stripeSubscriptionId: subscription.id },
-      data: { status: 'CANCELLED' },
-    });
+    this.logger.log(`Premium renovado (preapproval ${preapprovalId}) -> expira ${expiresAt.toISOString()}`);
   }
 }

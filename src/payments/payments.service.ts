@@ -1,13 +1,13 @@
-import { Injectable, BadRequestException, ServiceUnavailableException, Logger } from '@nestjs/common';
-import type { Stripe } from 'stripe/cjs/stripe.core.js';
+import { Injectable, BadRequestException, ServiceUnavailableException, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { StripeService } from './stripe.service.js';
+import { MpService } from './mp.service.js';
 import { DIAMOND_PACKS, type DiamondPackSku, PREMIUM_MONTHLY } from './catalog.js';
 
 /**
- * Orquestra a criacao de Checkout Sessions e Customer Portal sessions
- * do Stripe. Toda chamada e gateada pela feature flag PAYMENTS_ENABLED:
- * se false, lanca 503 — o frontend mostra "Em breve".
+ * Orquestra criacao de Preferencias (Checkout Pro) e PreApprovals
+ * (assinatura recorrente) do Mercado Pago. Toda chamada e gateada pela
+ * feature flag PAYMENTS_ENABLED: se false, lanca 503 — o frontend mostra
+ * "Em breve".
  */
 @Injectable()
 export class PaymentsService {
@@ -15,11 +15,11 @@ export class PaymentsService {
 
   constructor(
     private prisma: PrismaService,
-    private stripe: StripeService,
+    private mp: MpService,
   ) {}
 
   private get isEnabled(): boolean {
-    return process.env.PAYMENTS_ENABLED === 'true' && this.stripe.isAvailable();
+    return process.env.PAYMENTS_ENABLED === 'true' && this.mp.isAvailable();
   }
 
   private requireEnabled() {
@@ -28,132 +28,201 @@ export class PaymentsService {
     }
   }
 
-  private requirePriceId(envVar: string): string {
-    const id = process.env[envVar];
-    if (!id) {
-      this.logger.error(`Env var ${envVar} ausente — Stripe Price ID necessario.`);
-      throw new ServiceUnavailableException('Configuração de pagamentos incompleta.');
-    }
-    return id;
-  }
-
-  private getReturnUrls() {
+  private getBaseUrls() {
     const base = process.env.APP_BASE_URL ?? 'http://localhost:5173';
+    const api = process.env.APP_API_URL ?? 'http://localhost:3001';
     return {
-      success_url: `${base}/payments/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${base}/payments/cancel`,
+      success: `${base}/payments/success`,
+      failure: `${base}/payments/cancel`,
+      pending: `${base}/payments/pending`,
+      // Mercado Pago envia notificacoes para esta URL via POST.
+      notification: `${api}/api/v1/payments/webhooks/mp`,
     };
   }
 
   /**
-   * Garante que o user tem stripeCustomerId. Cria no Stripe na primeira
-   * vez. Retorna o id.
+   * Cria preferencia de Checkout Pro para compra one-time de diamantes.
+   * Retorna init_point (URL para redirecionar o usuario).
    */
-  private async getOrCreateStripeCustomer(userId: string): Promise<string> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { id: true, email: true, username: true, stripeCustomerId: true },
-    });
-    if (!user) throw new BadRequestException('Usuário não encontrado.');
-    if (user.stripeCustomerId) return user.stripeCustomerId;
-
-    const customer = await this.stripe.raw.customers.create({
-      email: user.email ?? undefined,
-      name: user.username,
-      metadata: { userId: user.id },
-    });
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { stripeCustomerId: customer.id },
-    });
-    return customer.id;
-  }
-
   async createDiamondCheckout(userId: string, sku: string): Promise<{ url: string }> {
     this.requireEnabled();
     const pack = DIAMOND_PACKS[sku as DiamondPackSku];
     if (!pack) throw new BadRequestException('SKU inválido.');
-    const priceId = this.requirePriceId(pack.envVar);
-    const customerId = await this.getOrCreateStripeCustomer(userId);
-    const { success_url, cancel_url } = this.getReturnUrls();
 
-    const session = await this.stripe.raw.checkout.sessions.create({
-      mode: 'payment',
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url,
-      cancel_url,
-      customer: customerId,
-      client_reference_id: userId,
-      metadata: { userId, sku, diamonds: String(pack.diamonds) },
-      payment_method_types: ['card'],
-      locale: 'pt-BR',
-    });
-
-    return { url: session.url ?? '' };
-  }
-
-  async createPremiumCheckout(userId: string): Promise<{ url: string }> {
-    this.requireEnabled();
-    const priceId = this.requirePriceId(PREMIUM_MONTHLY.envVar);
-    const customerId = await this.getOrCreateStripeCustomer(userId);
-    const { success_url, cancel_url } = this.getReturnUrls();
-
-    const session = await this.stripe.raw.checkout.sessions.create({
-      mode: 'subscription',
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url,
-      cancel_url,
-      customer: customerId,
-      client_reference_id: userId,
-      metadata: { userId, type: 'premium' },
-      locale: 'pt-BR',
-    });
-
-    return { url: session.url ?? '' };
-  }
-
-  async createPortalSession(userId: string): Promise<{ url: string }> {
-    this.requireEnabled();
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { stripeCustomerId: true },
+      select: { id: true, email: true, username: true },
     });
-    if (!user?.stripeCustomerId) {
-      throw new BadRequestException('Você ainda não tem assinatura.');
+    if (!user) throw new NotFoundException('Usuário não encontrado.');
+
+    const urls = this.getBaseUrls();
+    const externalReference = `user:${userId}|sku:${sku}`;
+
+    try {
+      const result = await this.mp.preference.create({
+        body: {
+          items: [
+            {
+              id: sku,
+              title: pack.title,
+              quantity: 1,
+              unit_price: pack.priceBrl,
+              currency_id: 'BRL',
+            },
+          ],
+          payer: user.email ? { email: user.email } : undefined,
+          back_urls: {
+            success: urls.success,
+            failure: urls.failure,
+            pending: urls.pending,
+          },
+          auto_return: 'approved',
+          external_reference: externalReference,
+          notification_url: urls.notification,
+          statement_descriptor: 'TEMAKURI',
+          metadata: { userId, sku, diamonds: pack.diamonds },
+        },
+      });
+
+      const useSandbox = process.env.MP_USE_SANDBOX === 'true';
+      const url = (useSandbox ? result.sandbox_init_point : result.init_point) ?? '';
+      if (!url) {
+        this.logger.error(`Preferencia criada sem init_point — id=${result.id}`);
+        throw new ServiceUnavailableException('Falha ao iniciar pagamento.');
+      }
+      return { url };
+    } catch (err: any) {
+      this.logger.error(`Erro ao criar preferencia MP: ${err.message}`, err.stack);
+      throw new ServiceUnavailableException('Falha ao iniciar pagamento.');
     }
-    const base = process.env.APP_BASE_URL ?? 'http://localhost:5173';
-    const portal = await this.stripe.raw.billingPortal.sessions.create({
-      customer: user.stripeCustomerId,
-      return_url: `${base}/profile`,
-    });
-    return { url: portal.url };
   }
 
   /**
-   * Processa checkout.session.completed para mode=payment (compra de
-   * pacote de diamantes one-time). Idempotente via stripeSessionId @unique.
+   * Cria PreApproval (assinatura recorrente mensal) para o Premium.
+   * Usa MP_PREAPPROVAL_PLAN_ID_PREMIUM (criado uma vez no painel MP) ou,
+   * em fallback, cria preapproval avulso com auto_recurring inline.
    */
-  async handleDiamondCheckoutCompleted(session: Stripe.Checkout.Session) {
-    if (session.mode !== 'payment') return;
-    const sessionId = session.id;
-    const userId = session.client_reference_id;
-    const sku = session.metadata?.sku as DiamondPackSku | undefined;
-    if (!userId || !sku) {
-      this.logger.warn(`checkout.session.completed sem userId/sku — session=${sessionId}`);
+  async createPremiumCheckout(userId: string): Promise<{ url: string }> {
+    this.requireEnabled();
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, username: true, isPremium: true, premiumExpiresAt: true },
+    });
+    if (!user) throw new NotFoundException('Usuário não encontrado.');
+    if (!user.email) {
+      throw new BadRequestException('Premium exige email cadastrado no perfil.');
+    }
+    if (user.isPremium && user.premiumExpiresAt && user.premiumExpiresAt > new Date()) {
+      throw new BadRequestException('Você já possui Premium ativo.');
+    }
+
+    const urls = this.getBaseUrls();
+    const planId = process.env.MP_PREAPPROVAL_PLAN_ID_PREMIUM;
+    const externalReference = `user:${userId}`;
+
+    try {
+      const body: any = {
+        payer_email: user.email,
+        back_url: urls.success,
+        external_reference: externalReference,
+        reason: PREMIUM_MONTHLY.reason,
+      };
+
+      if (planId) {
+        body.preapproval_plan_id = planId;
+      } else {
+        // Fallback: cria assinatura sem plano pre-cadastrado.
+        body.auto_recurring = {
+          frequency: 1,
+          frequency_type: 'months',
+          transaction_amount: PREMIUM_MONTHLY.priceBrl,
+          currency_id: 'BRL',
+        };
+      }
+
+      const result = await this.mp.preapproval.create({ body });
+
+      const url = result.init_point ?? '';
+      if (!url) {
+        this.logger.error(`PreApproval criada sem init_point — id=${result.id}`);
+        throw new ServiceUnavailableException('Falha ao iniciar assinatura.');
+      }
+      return { url };
+    } catch (err: any) {
+      this.logger.error(`Erro ao criar preapproval MP: ${err.message}`, err.stack);
+      throw new ServiceUnavailableException('Falha ao iniciar assinatura.');
+    }
+  }
+
+  /**
+   * MP nao tem Customer Portal. Cancelar assinatura significa marcar
+   * preapproval como 'cancelled' via API. O webhook subsequente sincroniza.
+   * Usuario continua Premium ate premiumExpiresAt vencer (cron expira).
+   */
+  async cancelPremium(userId: string): Promise<{ ok: true }> {
+    this.requireEnabled();
+    const sub = await this.prisma.premiumSubscription.findFirst({
+      where: { userId, status: 'ACTIVE' },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!sub) throw new NotFoundException('Nenhuma assinatura ativa.');
+
+    try {
+      await this.mp.preapproval.update({
+        id: sub.externalSubscriptionId,
+        body: { status: 'cancelled' },
+      });
+    } catch (err: any) {
+      this.logger.error(`Erro ao cancelar preapproval ${sub.externalSubscriptionId}: ${err.message}`);
+      throw new ServiceUnavailableException('Falha ao cancelar assinatura.');
+    }
+
+    await this.prisma.premiumSubscription.update({
+      where: { id: sub.id },
+      data: { status: 'CANCELLED', cancelAtPeriodEnd: true },
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Processa notificacao de payment (one-time/diamantes) aprovada.
+   * Idempotente via externalPaymentId @unique.
+   *
+   * Aceita o payment ja resolvido (chamado pelo webhook depois de fazer
+   * fetch via API por causa do x-signature).
+   */
+  async handleDiamondPaymentApproved(payment: any) {
+    const paymentId = String(payment.id);
+    const status = payment.status as string;
+    if (status !== 'approved') {
+      this.logger.debug(`Payment ${paymentId} status=${status}, ignorando.`);
       return;
     }
-    const pack = DIAMOND_PACKS[sku];
+    const externalRef = payment.external_reference as string | undefined;
+    if (!externalRef) {
+      this.logger.warn(`Payment ${paymentId} sem external_reference, pulando.`);
+      return;
+    }
+    // Formato: "user:<userId>|sku:<sku>"
+    const match = externalRef.match(/^user:([^|]+)\|sku:(.+)$/);
+    if (!match) {
+      // Pode ser uma preapproval_authorized_payment (assinatura) — ignora aqui.
+      this.logger.debug(`Payment ${paymentId} external_reference nao e de diamante: ${externalRef}`);
+      return;
+    }
+    const [, userId, sku] = match;
+    const pack = DIAMOND_PACKS[sku as DiamondPackSku];
     if (!pack) {
-      this.logger.warn(`SKU ${sku} desconhecido na session ${sessionId}`);
+      this.logger.warn(`SKU ${sku} desconhecido no payment ${paymentId}`);
       return;
     }
 
-    // Idempotencia
     const existing = await this.prisma.diamondTransaction.findUnique({
-      where: { stripeSessionId: sessionId },
+      where: { externalPaymentId: paymentId },
     });
     if (existing) {
-      this.logger.debug(`Session ${sessionId} ja processada, pulando.`);
+      this.logger.debug(`Payment ${paymentId} ja processado, pulando.`);
       return;
     }
 
@@ -164,7 +233,7 @@ export class PaymentsService {
           type: 'PURCHASE',
           amount: pack.diamonds,
           description: `Compra ${pack.diamonds} diamantes (${sku})`,
-          stripeSessionId: sessionId,
+          externalPaymentId: paymentId,
           sku,
         },
       }),
@@ -174,7 +243,7 @@ export class PaymentsService {
       }),
     ]);
 
-    this.logger.log(`+${pack.diamonds} 💎 para ${userId} via session ${sessionId}`);
+    this.logger.log(`+${pack.diamonds} diamantes para ${userId} via payment ${paymentId}`);
   }
 
   isPaymentsEnabled(): boolean {
