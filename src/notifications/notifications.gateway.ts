@@ -318,6 +318,18 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
     this.broadcastToRoom(data.roomCode, 'lobby:player_left', { userId: client.userId });
 
+    // Se a sala foi deletada do DB (caso unico humano saiu de partida com bots,
+    // ou sala vazia), limpa o engine in-memory tambem. Sem isso o engine ficaria
+    // zumbi: sala some do lobby mas qualquer requisicao com o codigo ainda
+    // retornaria estado de partida.
+    const stillExists = await this.roomsService.findByCode(data.roomCode).catch(() => null);
+    if (!stillExists) {
+      this.roomManager.destroy(data.roomCode);
+      this.roomBots.delete(data.roomCode);
+      this.roomReadyMap.delete(data.roomCode);
+      this.roomSockets.delete(data.roomCode);
+    }
+
     // Fecha sala de matchmaking se não restarem jogadores humanos em WAITING
     if (this.matchmakingRooms.has(data.roomCode)) {
       const room = await this.roomsService.findByCode(data.roomCode).catch(() => null);
