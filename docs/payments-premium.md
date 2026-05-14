@@ -31,7 +31,7 @@ Setar `PAYMENTS_ENABLED=true` e preencher as 7 env vars. Webhook + Checkout entr
    - Publishable key (frontend, `pk_test_...` / `pk_live_...`)
    - Secret key (backend, `sk_test_...` / `sk_live_...`)
 6. **Webhooks** (Developers → Webhooks → Add endpoint):
-   - URL: `https://api.temakuri.com.br/payments/webhooks/stripe`
+   - URL: `https://api.temakuri.com/payments/webhooks/stripe`
    - Eventos:
      - `checkout.session.completed`
      - `customer.subscription.created`
@@ -61,8 +61,8 @@ STRIPE_PRICE_DIAMONDS_1200=price_xxx
 STRIPE_PRICE_DIAMONDS_3000=price_xxx
 STRIPE_PRICE_PREMIUM_MONTHLY=price_xxx
 
-APP_BASE_URL=https://temakuri.com.br
-APP_API_URL=https://api.temakuri.com.br
+APP_BASE_URL=https://temakuri.com
+APP_API_URL=https://api.temakuri.com
 ```
 
 ---
