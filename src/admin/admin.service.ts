@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RoomsService } from '../rooms/rooms.service.js';
@@ -17,10 +18,13 @@ const USER_SELECT = {
   xp: true,
   level: true,
   coins: true,
+  diamonds: true,
   pds: true,
   rankedWarnings: true,
   rankedSuspendedUntil: true,
   isPremium: true,
+  premiumExpiresAt: true,
+  activeTheme: true,
   createdAt: true,
   stats: {
     select: {
@@ -34,6 +38,7 @@ const USER_SELECT = {
     select: {
       unlockedAvatars: true,
       unlockedModes: true,
+      unlockedThemes: true,
     },
   },
 } as const;
@@ -43,6 +48,7 @@ export class AdminService {
   constructor(
     private prisma: PrismaService,
     private roomsService: RoomsService,
+    private events: EventEmitter2,
   ) {}
 
   async findAllRooms() {
@@ -95,12 +101,16 @@ export class AdminService {
   async adminKickPlayer(code: string, userId: string) {
     const room = await this.prisma.room.findUnique({ where: { code } });
     if (!room) throw new NotFoundException('Sala não encontrada');
-    await this.prisma.roomPlayer.deleteMany({ where: { roomId: room.id, userId } });
-    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { isGuest: true, isBot: true } });
-    if (user?.isGuest || user?.isBot) {
-      await this.roomsService['deleteEphemeralUsers']([userId]);
-    }
-    return this.roomsService.findByCode(code);
+    // Usa a logica oficial de leaveRoom — cuida de host change, room cleanup,
+    // spectator promotion e dispara o evento rooms.public.changed.
+    await this.roomsService.leaveRoom(userId, code);
+    // Emite evento custom para a gateway forcar disconnect do socket do
+    // usuario kickado e enviar uma notificacao visual ("Voce foi removido
+    // pelo admin"). Sem isso o cliente continua com socket aberto e estado
+    // in-memory antigo no engine.
+    this.events.emit('admin.kicked', { roomCode: code, userId });
+    // Idempotencia para retornar 200 mesmo se a sala for deletada por leave.
+    return this.roomsService.findByCode(code).catch(() => ({ code, deleted: true }));
   }
 
   async findAllUsers() {
@@ -218,5 +228,36 @@ export class AdminService {
     }
 
     return this.findUser(id);
+  }
+
+  /**
+   * Credita diamantes manualmente. Util pra testes na Fase A (Stripe ainda
+   * nao integrado) e pra suporte/recompensas em prod. Sempre cria um registro
+   * em DiamondTransaction com type=ADMIN_GRANT para rastreabilidade.
+   */
+  async creditDiamonds(userId: string, amount: number, reason?: string) {
+    if (!Number.isInteger(amount) || amount === 0) {
+      throw new NotFoundException('Quantidade invalida.');
+    }
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, diamonds: true } });
+    if (!user) throw new NotFoundException('Usuario nao encontrado.');
+    if (amount < 0 && (user.diamonds + amount) < 0) {
+      throw new NotFoundException('Saldo de diamantes ficaria negativo.');
+    }
+    await this.prisma.$transaction([
+      this.prisma.diamondTransaction.create({
+        data: {
+          userId,
+          type: 'ADMIN_GRANT',
+          amount,
+          description: reason ?? `Credito manual via admin (${amount > 0 ? '+' : ''}${amount})`,
+        },
+      }),
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { diamonds: { increment: amount } },
+      }),
+    ]);
+    return this.findUser(userId);
   }
 }

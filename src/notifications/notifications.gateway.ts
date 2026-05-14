@@ -933,6 +933,32 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     });
   }
 
+  /**
+   * Admin removeu um jogador da sala. Notifica o cliente alvo, encerra a
+   * conexao para que o GameBoard receba o close e redirecione, e limpa o
+   * engine in-memory se a sala ainda existir.
+   */
+  @OnEvent('admin.kicked')
+  handleAdminKicked({ roomCode, userId }: { roomCode: string; userId: string }) {
+    this.clearTurnTimer(roomCode);
+    // Notifica todos da sala que esse player saiu (atualizar UI)
+    this.broadcastToRoom(roomCode, 'lobby:player_left', { userId, reason: 'kicked' });
+    // Acha o socket do usuario kickado, manda evento direcionado e fecha
+    const sockets = this.roomSockets.get(roomCode);
+    if (sockets) {
+      sockets.forEach((client) => {
+        if (client.userId === userId) {
+          this.sendToClient(client, 'admin:kicked', { roomCode, message: 'Você foi removido da sala pelo admin.' });
+          // Pequeno delay pra mensagem chegar antes de fechar a conexao
+          setTimeout(() => {
+            try { client.close(1000, 'kicked-by-admin'); } catch { /* noop */ }
+          }, 200);
+          sockets.delete(client);
+        }
+      });
+    }
+  }
+
   private dispatchEvents(roomCode: string, events: EngineEvent[]) {
     const engine = this.roomManager.get(roomCode);
     for (const event of events) {

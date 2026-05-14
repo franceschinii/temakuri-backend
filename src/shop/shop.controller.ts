@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, ParseIntPipe, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Param, ParseIntPipe, UseGuards, Request, Body } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { ShopService } from './shop.service.js';
 
@@ -25,5 +25,25 @@ export class ShopController {
   @Post('mode/:mode')
   purchaseMode(@Request() req: any, @Param('mode') mode: string) {
     return this.shopService.purchaseMode(req.user.id, mode.toUpperCase());
+  }
+
+  @Post('theme/:key')
+  purchaseTheme(@Request() req: any, @Param('key') key: string) {
+    return this.shopService.purchaseTheme(req.user.id, key.toLowerCase());
+  }
+
+  @Post('theme/active')
+  setActiveTheme(@Request() req: any, @Body() body: { theme: string | null }) {
+    return this.shopService.setActiveTheme(req.user.id, body?.theme ?? null);
+  }
+
+  @Post('coin-pack/:sku')
+  purchaseCoinPack(@Request() req: any, @Param('sku') sku: string) {
+    return this.shopService.purchaseCoinPack(req.user.id, sku.toUpperCase());
+  }
+
+  @Post('utility/:sku')
+  useUtility(@Request() req: any, @Param('sku') sku: string) {
+    return this.shopService.useUtility(req.user.id, sku.toUpperCase());
   }
 }
