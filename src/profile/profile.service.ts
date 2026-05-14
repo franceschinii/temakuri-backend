@@ -93,6 +93,78 @@ export class ProfileService {
     }));
   }
 
+  /**
+   * Retorna o historico de partidas de um usuario. Cada item agrega
+   * placement do user, modo da sala, duracao, recompensas e a lista de
+   * oponentes (username + avatarIndex) que jogaram a mesma partida.
+   */
+  async getMatchHistory(userId: string, limit = 20, offset = 0) {
+    const safeLimit = Math.min(Math.max(limit, 1), 50);
+    const results = await this.prisma.gameResult.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: safeLimit,
+      skip: Math.max(0, offset),
+      include: {
+        room: {
+          select: {
+            id: true,
+            code: true,
+            mode: true,
+            isRanked: true,
+            startedAt: true,
+            endedAt: true,
+          },
+        },
+      },
+    });
+    if (results.length === 0) return { items: [], hasMore: false };
+
+    const roomIds = results.map(r => r.roomId);
+    const opponentsByRoom = await this.prisma.gameResult.findMany({
+      where: { roomId: { in: roomIds }, userId: { not: userId } },
+      select: {
+        roomId: true,
+        placement: true,
+        user: { select: { id: true, username: true, avatarIndex: true, isBot: true } },
+      },
+    });
+    const oppMap = new Map<string, typeof opponentsByRoom>();
+    for (const o of opponentsByRoom) {
+      if (!oppMap.has(o.roomId)) oppMap.set(o.roomId, [] as any);
+      oppMap.get(o.roomId)!.push(o);
+    }
+
+    const items = results.map(r => {
+      const durationSec = r.room.startedAt && r.room.endedAt
+        ? Math.max(0, Math.floor((r.room.endedAt.getTime() - r.room.startedAt.getTime()) / 1000))
+        : null;
+      const opponents = (oppMap.get(r.roomId) ?? []).map(o => ({
+        userId: o.user.id,
+        username: o.user.username,
+        avatarIndex: o.user.avatarIndex,
+        isBot: o.user.isBot,
+        placement: o.placement,
+      }));
+      return {
+        id: r.id,
+        finishedAt: r.room.endedAt ?? r.createdAt,
+        roomCode: r.room.code,
+        mode: r.room.mode,
+        isRanked: r.room.isRanked,
+        placement: r.placement,
+        totalPlayers: opponents.length + 1,
+        xpEarned: r.xpEarned,
+        coinsEarned: r.coinsEarned,
+        pdsChange: r.pdsChange,
+        durationSec,
+        opponents,
+      };
+    });
+
+    return { items, hasMore: results.length === safeLimit };
+  }
+
   async getLeaderboardRankForUser(userId: string): Promise<{ rank: number | null }> {
     const count = await this.prisma.user.count({
       where: { isGuest: false, isBot: false, isBanned: false, pds: { gt: 0 } },

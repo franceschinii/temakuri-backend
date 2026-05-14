@@ -55,4 +55,18 @@ export class ProfileController {
   getPublicProfile(@Param('userId') userId: string) {
     return this.profileService.getPublicProfile(userId);
   }
+
+  @Get(':userId/matches')
+  @ApiOperation({ summary: 'Get user match history (paginated)' })
+  getMatchHistory(
+    @Param('userId') userId: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.profileService.getMatchHistory(
+      userId,
+      limit ? parseInt(limit, 10) : 20,
+      offset ? parseInt(offset, 10) : 0,
+    );
+  }
 }
