@@ -221,27 +221,13 @@ export class RoomsService {
     if (alreadyIn) return this.findByCode(code);
 
     if (room.status === 'IN_PROGRESS') {
-      // Entra como espectador — aguarda próxima rodada (reset da sala)
-      const usedSeats = new Set(room.players.map(p => p.seat));
-      let seat = 0;
-      while (usedSeats.has(seat)) seat++;
-      await this.prisma.roomPlayer.create({
-        data: { roomId: room.id, userId, seat, status: 'SPECTATOR' },
-      });
-      return this.findByCode(code);
+      throw new BadRequestException('Partida em andamento. Tente outra sala.');
     }
 
     if (room.status !== 'WAITING') throw new BadRequestException('Room already started');
 
-    // Sala WAITING lotada: entra como espectador aguardando vaga
     if (room.players.length >= room.maxPlayers) {
-      const usedSeats = new Set(room.players.map(p => p.seat));
-      let seat = 0;
-      while (usedSeats.has(seat)) seat++;
-      await this.prisma.roomPlayer.create({
-        data: { roomId: room.id, userId, seat, status: 'SPECTATOR' },
-      });
-      return this.findByCode(code);
+      throw new BadRequestException('Sala cheia.');
     }
 
     const usedSeats = new Set(room.players.map(p => p.seat));
@@ -304,7 +290,7 @@ export class RoomsService {
         return { action: 'hostChanged', newHostId, isPrivate: room.isPrivate };
       }
 
-      // Caso 4: non-host saiu, ainda há humano → segue para spectator promotion
+      // Caso 4: non-host saiu, ainda há humano → segue
       return { action: 'continue', remainingIds, freshPlayers, room };
     });
 
@@ -321,28 +307,13 @@ export class RoomsService {
       return;
     }
 
-    // result.action === 'continue' — non-host saiu, falta tratar spectator promotion
+    // result.action === 'continue' — non-host saiu
     const { room } = result;
     {
       // Non-host leaving — free username if guest
       const leaving = await this.prisma.user.findUnique({ where: { id: userId }, select: { isGuest: true } });
       if (leaving?.isGuest) {
         await this.deleteEphemeralUsers([userId]);
-      }
-
-      // Sala WAITING: promove o primeiro espectador aguardando para jogador ativo
-      if (room.status === 'WAITING') {
-        const activePlayers = room.players.filter(p => p.userId !== userId && p.status !== 'SPECTATOR');
-        if (activePlayers.length < room.maxPlayers) {
-          const spectator = room.players.find(p => p.userId !== userId && p.status === 'SPECTATOR');
-          if (spectator) {
-            await this.prisma.roomPlayer.update({
-              where: { id: spectator.id },
-              data: { status: 'CONNECTED' },
-            });
-            this.events.emit('rooms.spectator_promoted', { roomCode: room.code, userId: spectator.userId });
-          }
-        }
       }
     }
 
@@ -657,12 +628,6 @@ export class RoomsService {
       await this.deleteEphemeralUsers(botUserIds);
     }
 
-    // Converter espectadores em jogadores ativos
-    await this.prisma.roomPlayer.updateMany({
-      where: { roomId: room.id, status: 'SPECTATOR' },
-      data: { status: 'CONNECTED' },
-    });
-
     const updated = await this.prisma.room.update({
       where: { code },
       data: { status: 'WAITING', startedAt: null, endedAt: null },
@@ -774,7 +739,7 @@ export class RoomsService {
         isBot: rp.user?.isBot ?? false,
         isGuest: rp.user?.isGuest ?? false,
         isAdmin: rp.user?.isAdmin ?? false,
-        isSpectator: rp.status === 'SPECTATOR',
+        isSpectator: false,
         sessionWins: rp.sessionWins ?? 0,
       })),
     };

@@ -101,8 +101,8 @@ export class AdminService {
   async adminKickPlayer(code: string, userId: string) {
     const room = await this.prisma.room.findUnique({ where: { code } });
     if (!room) throw new NotFoundException('Sala não encontrada');
-    // Usa a logica oficial de leaveRoom — cuida de host change, room cleanup,
-    // spectator promotion e dispara o evento rooms.public.changed.
+    // Usa a logica oficial de leaveRoom — cuida de host change, room cleanup
+    // e dispara o evento rooms.public.changed.
     await this.roomsService.leaveRoom(userId, code);
     // Emite evento custom para a gateway forcar disconnect do socket do
     // usuario kickado e enviar uma notificacao visual ("Voce foi removido

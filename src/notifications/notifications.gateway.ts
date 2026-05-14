@@ -233,12 +233,6 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       // (ou abriu nova aba) sincronize quem ja esta pronto
       const readySnapshot = Array.from(this.roomReadyMap.get(data.roomCode) ?? []);
       this.sendToClient(client, 'lobby:ready_snapshot', { ready: readySnapshot });
-
-      // Notifica espectador se entrou em partida em andamento
-      const isSpectator = room.players.find((p: any) => p.userId === client.userId)?.isSpectator === true;
-      if (isSpectator) {
-        this.sendToUser(client.userId, 'game:spectator_mode', { roomCode: data.roomCode });
-      }
     } catch (e: any) {
       const isWrongPassword = e?.message === 'Senha incorreta' || e?.status === 403;
       this.sendToClient(client, 'lobby:error', {
@@ -344,17 +338,6 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   async handleSetReady(@ConnectedSocket() client: AuthenticatedSocket, @MessageBody() data: { roomCode: string; ready: boolean }) {
     if (!client.userId) return;
 
-    // Espectadores nao podem marcar ready — poluem o readyMap e bloqueiam start
-    const room = await this.roomsService.findByCode(data.roomCode).catch(() => null);
-    const me = room?.players.find((p: any) => p.userId === client.userId);
-    if (me?.isSpectator) {
-      this.sendToClient(client, 'lobby:error', {
-        code: 'IS_SPECTATOR',
-        message: 'Espectadores não podem marcar pronto',
-      });
-      return;
-    }
-
     const engine = this.roomManager.get(data.roomCode);
     if (engine) {
       engine.setReady(client.userId, data.ready);
@@ -422,7 +405,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       if (!freshRoom || freshRoom.status !== 'WAITING' || freshRoom.players.length < 2) {
         return;
       }
-      const activePlayers = freshRoom.players.filter((p: any) => !p.isSpectator);
+      const activePlayers = freshRoom.players;
       if (activePlayers.length < 2) return;
 
       const engine = this.roomManager.create(data.roomCode, freshRoom.mode as any, freshRoom.handBias ?? 0, freshRoom.initialTokens ?? 2);
@@ -436,6 +419,19 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       const events = engine.startRound();
       this.dispatchEvents(data.roomCode, events);
       this.scheduleBotMoveIfNeeded(data.roomCode, engine);
+
+      // Garante que mesmo se o GameBoard ainda nao montou o listener no
+      // cliente, um segundo state_sync chega depois da navegacao e popula
+      // a UI. Resolve o caso de "tela vazia ao iniciar" sem precisar de F5.
+      const humanUserIds = activePlayers.filter((p: any) => !p.isBot).map((p: any) => p.userId);
+      setTimeout(() => {
+        const enginePtr = this.roomManager.get(data.roomCode);
+        if (!enginePtr) return;
+        for (const userId of humanUserIds) {
+          const state = enginePtr.getClientStateFor(userId);
+          this.sendToUser(userId, 'game:state_sync', { state, spectatorCount: 0, isSpectator: false });
+        }
+      }, 250);
     }, STARTING_COUNTDOWN_MS);
   }
 
@@ -458,13 +454,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       return;
     }
 
-    const spectatorCount = this.getSpectatorCount(data.roomCode, engine);
-
-    // Espectador: registra presença mas não altera estado do engine
+    // Usuario nao faz parte da partida — feature de espectador removida.
     if (!engine.hasPlayer(client.userId)) {
-      const state = engine.getClientStateFor(client.userId);
-      state.myHand = [];
-      this.sendToClient(client, 'game:state_sync', { state, spectatorCount, isSpectator: true });
+      this.sendToClient(client, 'game:error', {
+        code: 'NOT_IN_GAME',
+        message: 'Você não faz parte desta partida.',
+      });
       return;
     }
 
@@ -472,17 +467,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.dispatchEvents(data.roomCode, events);
 
     const state = engine.getClientStateFor(client.userId);
-    this.sendToClient(client, 'game:state_sync', { state, spectatorCount, isSpectator: false });
-  }
-
-  private getSpectatorCount(roomCode: string, engine: import('../game/engine/GameEngine.js').GameEngine): number {
-    const sockets = this.roomSockets.get(roomCode);
-    if (!sockets) return 0;
-    let count = 0;
-    sockets.forEach(ws => {
-      if (ws.userId && !engine.hasPlayer(ws.userId)) count++;
-    });
-    return count;
+    this.sendToClient(client, 'game:state_sync', { state, spectatorCount: 0, isSpectator: false });
   }
 
   @SubscribeMessage('game:play_cards')
@@ -950,13 +935,6 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
   }
 
-  @OnEvent('rooms.spectator_promoted')
-  async handleSpectatorPromoted({ roomCode, userId }: { roomCode: string; userId: string }) {
-    this.sendToUser(userId, 'lobby:promoted_to_player', { roomCode });
-    const room = await this.roomsService.findByCode(roomCode).catch(() => null);
-    if (room) this.broadcastToRoom(roomCode, 'lobby:room_updated', { room });
-  }
-
   @OnEvent('rooms.lobby.changed')
   broadcastLobbyRoomChanged({ roomCode, room }: { roomCode: string; room: unknown }) {
     this.broadcastToRoom(roomCode, 'lobby:room_updated', { room });
@@ -997,16 +975,9 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   private dispatchEvents(roomCode: string, events: EngineEvent[]) {
-    const engine = this.roomManager.get(roomCode);
     for (const event of events) {
       if (event.targetUserId) {
         this.sendToUser(event.targetUserId, event.type, event.payload);
-      } else if (event.type === 'game:turn_started' && engine) {
-        // Piggyback spectatorCount on turn_started so players see live updates
-        this.broadcastToRoom(roomCode, event.type, {
-          ...(event.payload as object),
-          spectatorCount: this.getSpectatorCount(roomCode, engine),
-        });
       } else {
         this.broadcastToRoom(roomCode, event.type, event.payload);
       }
@@ -1015,6 +986,15 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       if (event.type === 'game:turn_started') {
         const { userId, timeoutMs } = event.payload as { userId: string; timeoutMs: number };
         this.armTurnTimer(roomCode, userId, timeoutMs);
+
+        // Reemite a mao autoritativa do jogador da vez. Garante que mesmo se
+        // o cliente perdeu algum your_hand anterior, ao virar a vez dele a
+        // mao reflete o estado real do engine — sem janela de mao stale.
+        const engineForHand = this.roomManager.get(roomCode);
+        if (engineForHand) {
+          const handState = engineForHand.getClientStateFor(userId);
+          this.sendToUser(userId, 'game:your_hand', { hand: handState.myHand });
+        }
       } else if (
         event.type === 'game:trick_pick_offer' ||
         event.type === 'game:duel_pass_offer' ||
