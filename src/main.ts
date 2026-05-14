@@ -6,8 +6,9 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module.js';
 
 async function bootstrap() {
-  // rawBody=true permite que WebhooksController acesse req.rawBody com o
-  // payload bruto, necessario para validar a assinatura do Stripe.
+  // rawBody=true preservado por defesa. Mercado Pago usa HMAC sobre
+  // headers + data.id, nao sobre o body, entao tecnicamente nao depende
+  // disso — mas mantemos pra evitar regressao caso o provider mude.
   const app = await NestFactory.create(AppModule, { rawBody: true });
 
   const allowedOrigins = (process.env.FRONTEND_URL ?? 'http://localhost:5173')

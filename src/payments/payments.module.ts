@@ -4,13 +4,13 @@ import { PrismaModule } from '../prisma/prisma.module.js';
 import { PaymentsController } from './payments.controller.js';
 import { WebhooksController } from './webhooks.controller.js';
 import { PaymentsService } from './payments.service.js';
-import { StripeService } from './stripe.service.js';
+import { MpService } from './mp.service.js';
 import { PremiumService } from './premium.service.js';
 
 @Module({
   imports: [PrismaModule, ScheduleModule.forRoot()],
   controllers: [PaymentsController, WebhooksController],
-  providers: [StripeService, PaymentsService, PremiumService],
+  providers: [MpService, PaymentsService, PremiumService],
   exports: [PaymentsService, PremiumService],
 })
 export class PaymentsModule {}

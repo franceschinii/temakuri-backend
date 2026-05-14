@@ -194,7 +194,7 @@ export class AuthService {
   }
 
   private sanitizeUser(user: any) {
-    const { passwordHash, stripeCustomerId, ...rest } = user;
+    const { passwordHash, externalCustomerId, ...rest } = user;
     return {
       ...rest,
       xp: rest.xp ?? 0,

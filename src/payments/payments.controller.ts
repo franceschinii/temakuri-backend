@@ -22,8 +22,8 @@ export class PaymentsController {
     return this.payments.createPremiumCheckout(req.user.id);
   }
 
-  @Post('portal')
-  portal(@Request() req: any) {
-    return this.payments.createPortalSession(req.user.id);
+  @Post('premium/cancel')
+  premiumCancel(@Request() req: any) {
+    return this.payments.cancelPremium(req.user.id);
   }
 }

@@ -231,7 +231,7 @@ export class AdminService {
   }
 
   /**
-   * Credita diamantes manualmente. Util pra testes na Fase A (Stripe ainda
+   * Credita diamantes manualmente. Util pra testes na Fase A (MP ainda
    * nao integrado) e pra suporte/recompensas em prod. Sempre cria um registro
    * em DiamondTransaction com type=ADMIN_GRANT para rastreabilidade.
    */

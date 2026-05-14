@@ -30,7 +30,7 @@ model User {
   rankedSuspendedUntil   DateTime?
   premiumExpiresAt       DateTime?
   lastPremiumGrantAt     DateTime?
-  stripeCustomerId       String?   @unique
+  externalCustomerId     String?   @unique
   activeTheme            String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -146,8 +146,8 @@ model DiamondTransaction {
   type            String   // 'PURCHASE' | 'SPEND' | 'PREMIUM_GRANT' | 'REFUND' | 'ADMIN_GRANT'
   amount          Int      // positivo ou negativo
   description     String?
-  stripeSessionId String?  @unique
-  stripeInvoiceId String?  @unique
+  externalPaymentId   String? @unique
+  externalInvoiceId   String? @unique
   sku             String?
   metadata        Json?
   createdAt       DateTime @default(now())
@@ -163,8 +163,8 @@ model PremiumSubscription {
   startedAt            DateTime  @default(now())
   expiresAt            DateTime
   cancelAtPeriodEnd    Boolean   @default(false)
-  stripeSubscriptionId String    @unique
-  stripeCustomerId     String
+  externalSubscriptionId String  @unique
+  externalCustomerId     String
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
