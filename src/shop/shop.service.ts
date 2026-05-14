@@ -1,13 +1,13 @@
 import { Injectable, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 
-const AVATAR_PRICES: Record<number, number> = { 4: 15, 5: 20, 6: 25, 7: 30 };
+const AVATAR_PRICES: Record<number, number> = { 4: 15, 5: 20, 6: 25, 7: 30, 8: 50 };
 const MODE_PRICES: Record<string, number> = { MERCADO: 20, RODIZIO: 30, DEGUSTACAO: 50 };
 const AVATAR_NAMES: Record<number, string> = {
   0: 'Temaki', 1: 'Ramen', 2: 'Onigiri', 3: 'Gyoza',
-  4: 'Sashimi', 5: 'Takoyaki', 6: 'Missô', 7: 'Udon',
+  4: 'Sashimi', 5: 'Takoyaki', 6: 'Missô', 7: 'Udon', 8: 'Udon Gold',
 };
-const ALL_AVATARS = [0, 1, 2, 3, 4, 5, 6, 7];
+const ALL_AVATARS = [0, 1, 2, 3, 4, 5, 6, 7, 8];
 const PURCHASABLE_MODES = ['MERCADO', 'RODIZIO', 'DEGUSTACAO'];
 
 @Injectable()
