@@ -39,14 +39,27 @@ export class ProfileService {
   async getPublicProfile(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { stats: true },
+      include: { stats: true, rankedStats: true },
     });
     if (!user) throw new NotFoundException('User not found');
     return {
       id: user.id,
       username: user.username,
       avatarIndex: user.avatarIndex,
+      level: user.level,
+      xp: user.xp,
+      pds: user.pds,
+      winStreak: user.winStreak,
+      isAdmin: user.isAdmin,
+      isBot: user.isBot,
+      isGuest: user.isGuest,
+      isPremium: user.isPremium,
+      isBanned: user.isBanned,
+      createdAt: user.createdAt,
       stats: user.stats,
+      rankedStats: user.rankedStats
+        ? { rankedWins: user.rankedStats.rankedWins, rankedLosses: user.rankedStats.rankedLosses }
+        : null,
     };
   }
 
