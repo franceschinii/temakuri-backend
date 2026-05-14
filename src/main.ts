@@ -6,7 +6,9 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module.js';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody=true permite que WebhooksController acesse req.rawBody com o
+  // payload bruto, necessario para validar a assinatura do Stripe.
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
   const allowedOrigins = (process.env.FRONTEND_URL ?? 'http://localhost:5173')
     .split(',')
