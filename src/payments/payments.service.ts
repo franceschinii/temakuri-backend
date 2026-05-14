@@ -137,6 +137,9 @@ export class PaymentsService {
         back_url: urls.success,
         external_reference: externalReference,
         reason: PREMIUM_MONTHLY.reason,
+        // status pending permite criar a preapproval sem card_token_id;
+        // o pagador cadastra o cartao na tela do MP via init_point.
+        status: 'pending',
       };
 
       if (planId) {
