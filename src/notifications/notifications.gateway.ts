@@ -234,11 +234,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       const readySnapshot = Array.from(this.roomReadyMap.get(data.roomCode) ?? []);
       this.sendToClient(client, 'lobby:ready_snapshot', { ready: readySnapshot });
     } catch (e: any) {
-      const isWrongPassword = e?.message === 'Senha incorreta' || e?.status === 403;
-      this.sendToClient(client, 'lobby:error', {
-        code: isWrongPassword ? 'WRONG_PASSWORD' : 'ROOM_NOT_FOUND',
-        message: e.message,
-      });
+      const msg = e?.message ?? '';
+      let code = 'ROOM_NOT_FOUND';
+      if (msg === 'Senha incorreta' || e?.status === 403) code = 'WRONG_PASSWORD';
+      else if (msg.includes('Sala cheia')) code = 'ROOM_FULL';
+      else if (msg.includes('em andamento')) code = 'ROOM_IN_PROGRESS';
+      this.sendToClient(client, 'lobby:error', { code, message: msg });
     }
   }
 
