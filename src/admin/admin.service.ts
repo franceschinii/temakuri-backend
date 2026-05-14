@@ -18,10 +18,13 @@ const USER_SELECT = {
   xp: true,
   level: true,
   coins: true,
+  diamonds: true,
   pds: true,
   rankedWarnings: true,
   rankedSuspendedUntil: true,
   isPremium: true,
+  premiumExpiresAt: true,
+  activeTheme: true,
   createdAt: true,
   stats: {
     select: {
@@ -35,6 +38,7 @@ const USER_SELECT = {
     select: {
       unlockedAvatars: true,
       unlockedModes: true,
+      unlockedThemes: true,
     },
   },
 } as const;
@@ -224,5 +228,36 @@ export class AdminService {
     }
 
     return this.findUser(id);
+  }
+
+  /**
+   * Credita diamantes manualmente. Util pra testes na Fase A (Stripe ainda
+   * nao integrado) e pra suporte/recompensas em prod. Sempre cria um registro
+   * em DiamondTransaction com type=ADMIN_GRANT para rastreabilidade.
+   */
+  async creditDiamonds(userId: string, amount: number, reason?: string) {
+    if (!Number.isInteger(amount) || amount === 0) {
+      throw new NotFoundException('Quantidade invalida.');
+    }
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true, diamonds: true } });
+    if (!user) throw new NotFoundException('Usuario nao encontrado.');
+    if (amount < 0 && (user.diamonds + amount) < 0) {
+      throw new NotFoundException('Saldo de diamantes ficaria negativo.');
+    }
+    await this.prisma.$transaction([
+      this.prisma.diamondTransaction.create({
+        data: {
+          userId,
+          type: 'ADMIN_GRANT',
+          amount,
+          description: reason ?? `Credito manual via admin (${amount > 0 ? '+' : ''}${amount})`,
+        },
+      }),
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { diamonds: { increment: amount } },
+      }),
+    ]);
+    return this.findUser(userId);
   }
 }

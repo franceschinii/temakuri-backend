@@ -55,6 +55,7 @@ export class ProfileService {
       isGuest: user.isGuest,
       isPremium: user.isPremium,
       isBanned: user.isBanned,
+      premiumExpiresAt: user.premiumExpiresAt,
       createdAt: user.createdAt,
       stats: user.stats,
       rankedStats: user.rankedStats

@@ -70,4 +70,10 @@ export class AdminController {
   updateUserProgression(@Param('id') id: string, @Body() dto: UpdateProgressionDto) {
     return this.adminService.updateUserProgression(id, dto);
   }
+
+  @Post('users/:id/credit-diamonds')
+  @HttpCode(HttpStatus.OK)
+  creditDiamonds(@Param('id') id: string, @Body() dto: { amount: number; reason?: string }) {
+    return this.adminService.creditDiamonds(id, dto.amount, dto.reason);
+  }
 }

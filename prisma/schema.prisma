@@ -22,11 +22,16 @@ model User {
   xp           Int       @default(0)
   level        Int       @default(1)
   coins        Int       @default(0)
+  diamonds     Int       @default(0)
   pds          Int       @default(0)
   winStreak    Int       @default(0)
   lossStreak   Int       @default(0)
   rankedWarnings         Int       @default(0)
   rankedSuspendedUntil   DateTime?
+  premiumExpiresAt       DateTime?
+  lastPremiumGrantAt     DateTime?
+  stripeCustomerId       String?   @unique
+  activeTheme            String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -37,6 +42,8 @@ model User {
   roomPlayers       RoomPlayer[]
   gameResults       GameResult[]
   passwordResetTokens PasswordResetToken[]
+  diamondTransactions  DiamondTransaction[]
+  premiumSubscriptions PremiumSubscription[]
 }
 
 model Session {
@@ -127,8 +134,42 @@ model UserInventory {
   userId          String   @unique
   unlockedAvatars Int[]    @default([0, 1, 2, 3])
   unlockedModes   String[] @default(["TRADITIONAL"])
+  unlockedThemes  String[] @default([])
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model DiamondTransaction {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type            String   // 'PURCHASE' | 'SPEND' | 'PREMIUM_GRANT' | 'REFUND' | 'ADMIN_GRANT'
+  amount          Int      // positivo ou negativo
+  description     String?
+  stripeSessionId String?  @unique
+  stripeInvoiceId String?  @unique
+  sku             String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model PremiumSubscription {
+  id                   String    @id @default(uuid())
+  userId               String
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status               String    // 'ACTIVE' | 'PAST_DUE' | 'CANCELLED' | 'EXPIRED'
+  startedAt            DateTime  @default(now())
+  expiresAt            DateTime
+  cancelAtPeriodEnd    Boolean   @default(false)
+  stripeSubscriptionId String    @unique
+  stripeCustomerId     String
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([userId, status])
+  @@index([expiresAt])
 }
 
 model RankedStats {

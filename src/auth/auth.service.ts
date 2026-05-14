@@ -194,18 +194,21 @@ export class AuthService {
   }
 
   private sanitizeUser(user: any) {
-    const { passwordHash, ...rest } = user;
+    const { passwordHash, stripeCustomerId, ...rest } = user;
     return {
       ...rest,
       xp: rest.xp ?? 0,
       level: rest.level ?? 1,
       coins: rest.coins ?? 0,
+      diamonds: rest.diamonds ?? 0,
       pds: rest.pds ?? 0,
       winStreak: rest.winStreak ?? 0,
       lossStreak: rest.lossStreak ?? 0,
       rankedWarnings: rest.rankedWarnings ?? 0,
       rankedSuspendedUntil: rest.rankedSuspendedUntil ?? null,
       isPremium: rest.isPremium ?? false,
+      premiumExpiresAt: rest.premiumExpiresAt ?? null,
+      activeTheme: rest.activeTheme ?? null,
     };
   }
 }
