@@ -11,6 +11,7 @@ import { ShopModule } from './shop/shop.module.js';
 import { MatchmakingModule } from './matchmaking/matchmaking.module.js';
 import { PaymentsModule } from './payments/payments.module.js';
 import { CouponsModule } from './coupons/coupons.module.js';
+import { ChangelogModule } from './changelog/changelog.module.js';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { CouponsModule } from './coupons/coupons.module.js';
     MatchmakingModule,
     PaymentsModule,
     CouponsModule,
+    ChangelogModule,
   ],
 })
 export class AppModule {}

@@ -205,6 +205,24 @@ model Coupon {
   @@index([validUntil])
 }
 
+/// Entrada do changelog gerenciada pelo admin. Substitui o array
+/// hardcoded antigo em src/data/changelog.ts do frontend.
+model ChangelogEntry {
+  id         String   @id @default(cuid())
+  date       String
+  version    String
+  title      String
+  category   String
+  highlights String[]
+  details    String
+  published  Boolean  @default(true)
+  sortIndex  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([published, sortIndex])
+}
+
 /// Log de uso de cupom — 1 registro por aplicacao em compra.
 model CouponRedemption {
   id            String   @id @default(cuid())
