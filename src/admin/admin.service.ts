@@ -195,13 +195,18 @@ export class AdminService {
     if (dto.rankedWarnings !== undefined) userUpdate.rankedWarnings = dto.rankedWarnings;
     if (dto.clearRankedSuspension) userUpdate.rankedSuspendedUntil = null;
     if (dto.isPremium !== undefined) userUpdate.isPremium = dto.isPremium;
+    if (dto.isAdmin !== undefined) userUpdate.isAdmin = dto.isAdmin;
 
     if (Object.keys(userUpdate).length > 0) {
       await this.prisma.user.update({ where: { id }, data: userUpdate });
     }
 
-    // Update inventory (avatars and modes)
-    if (dto.grantAvatars?.length || dto.revokeAvatars?.length || dto.grantModes?.length || dto.revokeModes?.length) {
+    // Update inventory (avatars, modes, themes)
+    if (
+      dto.grantAvatars?.length || dto.revokeAvatars?.length ||
+      dto.grantModes?.length || dto.revokeModes?.length ||
+      dto.grantThemes?.length || dto.revokeThemes?.length
+    ) {
       let inv = await this.prisma.userInventory.findUnique({ where: { userId: id } });
       if (!inv) {
         inv = await this.prisma.userInventory.create({
@@ -211,11 +216,14 @@ export class AdminService {
 
       let avatars = [...inv.unlockedAvatars];
       let modes = [...inv.unlockedModes];
+      let themes = [...inv.unlockedThemes];
 
       if (dto.grantAvatars) avatars = [...new Set([...avatars, ...dto.grantAvatars])];
       if (dto.revokeAvatars) avatars = avatars.filter(a => !dto.revokeAvatars!.includes(a));
       if (dto.grantModes) modes = [...new Set([...modes, ...dto.grantModes])];
       if (dto.revokeModes) modes = modes.filter(m => !dto.revokeModes!.includes(m));
+      if (dto.grantThemes) themes = [...new Set([...themes, ...dto.grantThemes])];
+      if (dto.revokeThemes) themes = themes.filter(t => !dto.revokeThemes!.includes(t));
 
       // Always keep avatar 0-3 and TRADITIONAL
       if (!avatars.includes(0)) avatars.unshift(0);
@@ -223,7 +231,7 @@ export class AdminService {
 
       await this.prisma.userInventory.update({
         where: { userId: id },
-        data: { unlockedAvatars: avatars, unlockedModes: modes },
+        data: { unlockedAvatars: avatars, unlockedModes: modes, unlockedThemes: themes },
       });
     }
 

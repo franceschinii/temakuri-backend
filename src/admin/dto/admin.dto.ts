@@ -89,6 +89,10 @@ export class UpdateProgressionDto {
   isPremium?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  isAdmin?: boolean;
+
+  @IsOptional()
   @IsArray()
   @IsInt({ each: true })
   grantAvatars?: number[];
@@ -107,4 +111,14 @@ export class UpdateProgressionDto {
   @IsArray()
   @IsString({ each: true })
   revokeModes?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  grantThemes?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  revokeThemes?: string[];
 }
