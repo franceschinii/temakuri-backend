@@ -12,6 +12,9 @@ interface PlayerState {
   tokensLeft: number;
   isConnected: boolean;
   isEliminated: boolean;
+  // True quando zera a mao na rodada atual. Resetado em startRound().
+  // Quem esta out-of-round nao recebe turno e nao perde prato.
+  isOutOfRound: boolean;
   isReady: boolean;
   isBot?: boolean;
   isGuest?: boolean;
@@ -83,6 +86,7 @@ export class GameEngine {
       tokensLeft: this.initialTokens,
       isConnected: true,
       isEliminated: false,
+      isOutOfRound: false,
       isReady: false,
       ...meta,
     });
@@ -148,6 +152,9 @@ export class GameEngine {
     this.phase = 'DEALING';
 
     const activePlayers = this.activePlayers();
+    // Limpa "fora da rodada" no inicio de cada rodada — todos os ativos voltam
+    // a participar normalmente. isEliminated permanece (jogo todo).
+    activePlayers.forEach(p => { p.isOutOfRound = false; });
 
     // Em RODIZIO, a partir da 2ª rodada as mãos já foram rotacionadas por
     // rotateHands() em resolveRoundEnd — não redistribuímos o baralho para
@@ -316,11 +323,37 @@ export class GameEngine {
     events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
 
     if (player.hand.length === 0) {
-      events.push({ type: 'game:player_hand_empty', payload: { userId } });
-      // Mão vazia: a pile anterior (se houver) vai pro descarte automaticamente — sem A2,
-      // pois o jogador venceu a rodada.
+      // Jogador zerou a mao: SAI da rodada (escapa do prejuizo). NAO perde
+      // prato. Pile anterior vai pro descarte automaticamente.
+      player.isOutOfRound = true;
       if (previousPile.length > 0) this.discardPile.push(...previousPile);
-      return { success: true, events: [...events, ...this.resolveRoundEnd(userId)] };
+      events.push({ type: 'game:player_hand_empty', payload: { userId } });
+      const remainingInRound = this.playersInRound().length;
+      events.push({
+        type: 'game:player_out_of_round',
+        payload: { userId, remainingInRound },
+      });
+
+      // Rodada acaba quando sobra 1 jogador com cartas — ele eh o perdedor
+      // (perde 1 prato). Se sobra >= 2, continua avancando turno normalmente.
+      if (remainingInRound <= 1) {
+        const loser = this.playersInRound()[0];
+        if (loser) {
+          return { success: true, events: [...events, ...this.resolveRoundEnd(loser.userId)] };
+        }
+        // Edge case: zerou junto do ultimo restante (impossivel no fluxo
+        // normal, mas defensivo). Trata como rodada sem perdedor — apenas
+        // inicia proxima sem decrementar token de ninguem.
+        this.lastWiperId = null;
+        return { success: true, events: [...events, ...this.startRound()] };
+      }
+
+      // Sobra >= 2 jogadores em rodada: avanca turno pulando este (advanceTurn
+      // ja pula isOutOfRound). Sem TRICK_PICK pois ele zerou a mao.
+      this.advanceTurn();
+      events.push({ type: 'game:turn_started', payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS } });
+      this.assertCardIntegrity();
+      return { success: true, events };
     }
 
     // Regra A2: se havia pile anterior, jogador escolhe pegar ou descartar antes do próximo turno
@@ -374,10 +407,13 @@ export class GameEngine {
       events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
     }
 
-    const activePlayers = this.activePlayers();
-    if (this.consecutivePasses >= activePlayers.length - 1) {
+    // Stalemate/wipe dispara quando todos OS QUE AINDA ESTAO NA RODADA
+    // passaram. Filtrar por playersInRound evita falso-positivo quando
+    // alguem ja saiu por zerar a mao.
+    const inRound = this.playersInRound();
+    if (this.consecutivePasses >= inRound.length - 1) {
       if (this.pile.length === 0) {
-        const stalemate = this.resolveStalemate(activePlayers);
+        const stalemate = this.resolveStalemate(inRound);
         this.assertCardIntegrity();
         return { success: true, events: [...events, ...stalemate] };
       }
@@ -491,10 +527,11 @@ export class GameEngine {
     return { success: true, events };
   }
 
-  private resolveStalemate(activePlayers: PlayerState[]): EngineEvent[] {
-    // Todos passaram sem ninguém jogar — quem tem mais cartas na mão perde.
-    // Em empate, perde quem tem o maior seat (critério determinístico).
-    const loser = activePlayers.reduce((worst, p) => {
+  private resolveStalemate(playersInRoundList: PlayerState[]): EngineEvent[] {
+    // Todos os jogadores ainda EM rodada passaram sem ninguem jogar —
+    // quem tem mais cartas na mao perde. Em empate, perde quem tem o
+    // maior seat (criterio deterministico).
+    const loser = playersInRoundList.reduce((worst, p) => {
       if (p.hand.length > worst.hand.length) return p;
       if (p.hand.length === worst.hand.length && p.seat > worst.seat) return p;
       return worst;
@@ -565,10 +602,10 @@ export class GameEngine {
       events.push({ type: 'game:your_hand', payload: { hand: player.hand }, targetUserId: userId });
     }
 
-    const activePlayers = this.activePlayers();
-    if (this.consecutivePasses >= activePlayers.length - 1) {
+    const inRound = this.playersInRound();
+    if (this.consecutivePasses >= inRound.length - 1) {
       if (this.pile.length === 0) {
-        const stalemate = this.resolveStalemate(activePlayers);
+        const stalemate = this.resolveStalemate(inRound);
         this.assertCardIntegrity();
         return { success: true, events: [...events, ...stalemate] };
       }
@@ -720,13 +757,17 @@ export class GameEngine {
 
   getTrickPileForPick(): Card[] { return this.trickPileForPick; }
 
-  private resolveRoundEnd(winnerId: string): EngineEvent[] {
+  /**
+   * Encerra a rodada decrementando 1 prato do PERDEDOR (quem ficou com
+   * cartas na mao por ultimo, ou quem causou o stalemate/duel loss).
+   * Se o perdedor chega a 0 pratos, eh ELIMINADO do jogo e o jogo termina.
+   */
+  private resolveRoundEnd(loserId: string): EngineEvent[] {
     this.phase = 'ROUND_END';
 
-    // Quem esvaziou a mão perde 1 prato. Ao chegar a 0, vence o jogo.
-    const winner = this.findPlayer(winnerId);
-    if (winner) {
-      winner.tokensLeft = Math.max(0, winner.tokensLeft - 1);
+    const loser = this.findPlayer(loserId);
+    if (loser) {
+      loser.tokensLeft = Math.max(0, loser.tokensLeft - 1);
     }
 
     const playerTokens: Record<string, number> = {};
@@ -734,39 +775,49 @@ export class GameEngine {
 
     const events: EngineEvent[] = [{
       type: 'game:round_ended',
-      payload: { loserIds: [winnerId], playerTokens },
+      // loserId (novo, singular) eh a fonte de verdade. loserIds (array)
+      // mantido por compatibilidade com clientes antigos durante o deploy.
+      payload: { loserId, loserIds: [loserId], playerTokens },
     }];
 
-    if (winner && winner.tokensLeft === 0) {
-      winner.isEliminated = true;
-      return [...events, ...this.resolveGameOver(winnerId)];
+    if (loser && loser.tokensLeft === 0) {
+      loser.isEliminated = true;
+      return [...events, ...this.resolveGameOver(loserId)];
     }
 
     if (this.mode === 'RODIZIO') {
       this.rotateHands();
     }
 
-    // Vencedor da rodada inicia a proxima (consumido por startRound()).
-    this.lastRoundWinnerId = winnerId;
+    // Quem perdeu a rodada inicia a proxima (mantem o seed determinístico
+    // — antes era "vencedor", agora eh "perdedor", mas a propriedade
+    // "alguem especifico abre a proxima" continua existindo).
+    this.lastRoundWinnerId = loserId;
     this.lastWiperId = null;
     return [...events, ...this.startRound()];
   }
 
-  private resolveGameOver(winnerId: string): EngineEvent[] {
+  /**
+   * Fim de jogo: o loserId chegou a 0 pratos. Ele eh o UNICO perdedor.
+   * Todos os outros sao vencedores (isWinner=true). Ordenacao do ranking:
+   * vencedores primeiro (mais pratos = melhor), tiebreaker por seat
+   * crescente. loser sempre por ultimo.
+   */
+  private resolveGameOver(loserId: string): EngineEvent[] {
     this.phase = 'GAME_OVER';
 
-    // Quem tem menos pratos ficou melhor — perdeu mais pratos = venceu mais rodadas.
-    // O vencedor (0 pratos) aparece em 1º.
     const sorted = [...this.players].sort((a, b) => {
-      if (a.userId === winnerId) return -1;
-      if (b.userId === winnerId) return 1;
-      return a.tokensLeft - b.tokensLeft;
+      if (a.userId === loserId) return 1;  // loser sempre ultimo
+      if (b.userId === loserId) return -1;
+      if (b.tokensLeft !== a.tokensLeft) return b.tokensLeft - a.tokensLeft;
+      return a.seat - b.seat;
     });
     const rankings: GameRanking[] = sorted.map((p, i) => ({
       userId: p.userId,
       username: p.username,
       placement: i + 1,
       tokensLeft: p.tokensLeft,
+      isWinner: p.userId !== loserId,
     }));
 
     return [{
@@ -791,7 +842,15 @@ export class GameEngine {
 
   private advanceTurn() {
     const active = this.activePlayers();
-    this.currentTurnIndex = (this.currentTurnIndex + 1) % active.length;
+    if (active.length === 0) return;
+    // Avanca circularmente pulando jogadores out-of-round. Garantido que
+    // sobra ao menos 1 jogador em rodada (a checagem de fim de rodada
+    // dispara antes de chegarmos aqui se sobrasse so 1).
+    for (let i = 0; i < active.length; i++) {
+      this.currentTurnIndex = (this.currentTurnIndex + 1) % active.length;
+      if (!active[this.currentTurnIndex].isOutOfRound) return;
+    }
+    // Fallback defensivo: se todos estao out (nao deveria), fica no atual.
   }
 
   /**
@@ -848,6 +907,16 @@ export class GameEngine {
       .sort((a, b) => a.seat - b.seat);
   }
 
+  /**
+   * Subset de activePlayers que ainda esta jogando NA rodada atual
+   * (nao eliminado do jogo E nao saiu da rodada por zerar a mao).
+   * Usado em advanceTurn, deteccao de fim de rodada, contagem de passes
+   * consecutivos, stalemate.
+   */
+  private playersInRound(): PlayerState[] {
+    return this.activePlayers().filter(p => !p.isOutOfRound);
+  }
+
   private findPlayer(userId: string): PlayerState | undefined {
     return this.players.find(p => p.userId === userId);
   }
@@ -862,6 +931,7 @@ export class GameEngine {
       tokensLeft: p.tokensLeft,
       isConnected: p.isConnected,
       isEliminated: p.isEliminated,
+      isOutOfRound: p.isOutOfRound,
       isReady: p.isReady,
       isBot: p.isBot,
       isGuest: p.isGuest,

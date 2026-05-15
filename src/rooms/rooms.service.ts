@@ -3,7 +3,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateRoomDto } from './dto/room.dto.js';
 import { customAlphabet } from 'nanoid';
-import { xpGain, coinsGain, computeLevel } from '../common/xp.utils.js';
+import { xpGain, coinsGain, coinsMultiplier, computeLevel } from '../common/xp.utils.js';
 import { calcPdsChange, clampPds, rankFromPds } from '../common/pds.utils.js';
 import { Prisma } from '@prisma/client';
 
@@ -68,10 +68,13 @@ export class RoomsService {
   }
 
   async createMatchmakingRoom(hostId: string, dto: CreateRoomDto) {
+    // Matchmaking ranqueado = sempre 1v1. Forca maxPlayers=2 mesmo se o
+    // chamador passar outro valor (defesa em profundidade).
+    const effectiveMaxPlayers = dto.isRanked ? 2 : dto.maxPlayers;
     const room = await this.createRoomWithUniqueCodeRetry({
       hostId,
       mode: dto.mode,
-      maxPlayers: dto.maxPlayers,
+      maxPlayers: effectiveMaxPlayers,
       isPrivate: dto.isPrivate ?? false,
       isRanked: dto.isRanked ?? false,
       handBias: dto.handBias ?? 0,
@@ -93,6 +96,12 @@ export class RoomsService {
     if (dto.isRanked) {
       if (dto.mode !== 'TRADITIONAL') {
         throw new BadRequestException('Ranked só está disponível no modo Tradicional');
+      }
+      // Ranqueada so faz sentido em 1v1 com a nova regra (so existe 1
+      // perdedor por partida, multi-player nao da pra distinguir
+      // colocacoes entre vencedores).
+      if (dto.maxPlayers !== 2) {
+        throw new BadRequestException('Ranqueada disponível apenas em 1v1');
       }
       if ((host.level ?? 1) < 10) {
         throw new ForbiddenException('Ranqueada requer nível 10 ou superior');
@@ -442,7 +451,7 @@ export class RoomsService {
 
   async markFinished(
     code: string,
-    results: { userId: string; placement: number; tokensLeft: number }[],
+    results: { userId: string; placement: number; tokensLeft: number; isWinner?: boolean }[],
     gameStats?: { saborTriggers: number; tricksWon: Record<string, number> },
   ): Promise<Record<string, { xpEarned: number; coinsEarned: number; newLevel: number; leveledUp: boolean; pdsChange: number; newPds: number; newRank: string }>> {
     // Idempotência: se room já está FINISHED, retorna sem reprocessar
@@ -494,8 +503,14 @@ export class RoomsService {
       if (ephemeralIds.has(r.userId)) continue;
       if (!stillInRoom.has(r.userId)) continue;
 
-      const earned = xpGain(r.placement, totalPlayers);
-      const coins = coinsGain(r.placement, totalPlayers);
+      // isWinner explicito vindo do engine (placement nao decide vitoria
+      // mais — em multi-player todos menos o ultimo sao vencedores).
+      // Fallback: em payloads antigos sem isWinner, usa placement === 1.
+      const isWinner = r.isWinner ?? (r.placement === 1);
+      const earned = xpGain(isWinner, totalPlayers);
+      const baseCoins = coinsGain(isWinner, totalPlayers);
+      // Multiplicador 1.5x em 1v1 e 1.5x em ranqueada (combinados 2.25x).
+      const coins = Math.round(baseCoins * coinsMultiplier(totalPlayers, room.isRanked));
 
       // Tudo dentro de uma transação para evitar race condition de streaks:
       // user.findUnique → calcPdsChange → user.update não pode ser interrompido
@@ -525,19 +540,23 @@ export class RoomsService {
         // Em jogos sem vencedor unico, o credito do sabor cai no primeiro lugar
         // — solucao simples sem mudar o engine.
         const tricksWonByMe = gameStats?.tricksWon?.[r.userId] ?? 0;
-        const saborGainedByMe = r.placement === 1 ? (gameStats?.saborTriggers ?? 0) : 0;
+        // saborTriggers eh agregado do jogo todo — credita ao(s) vencedor(es).
+        // Em 1v1: vai pro winner so. Em multi-player: todos os winners
+        // dividem o credito, mas como nao temos atribuicao por trigger,
+        // continuamos creditando o todo a cada winner (simplificacao).
+        const saborGainedByMe = isWinner ? (gameStats?.saborTriggers ?? 0) : 0;
         await tx.userStats.upsert({
           where: { userId: r.userId },
           create: {
             userId: r.userId,
             gamesPlayed: 1,
-            gamesWon: r.placement === 1 ? 1 : 0,
+            gamesWon: isWinner ? 1 : 0,
             tricksWon: tricksWonByMe,
             saborTriggers: saborGainedByMe,
           },
           update: {
             gamesPlayed: { increment: 1 },
-            gamesWon: { increment: r.placement === 1 ? 1 : 0 },
+            gamesWon: { increment: isWinner ? 1 : 0 },
             tricksWon: { increment: tricksWonByMe },
             saborTriggers: { increment: saborGainedByMe },
           },
@@ -558,9 +577,12 @@ export class RoomsService {
         let newWinStreak = user.winStreak ?? 0;
         let newLossStreak = user.lossStreak ?? 0;
 
-        if (room.isRanked) {
-          const isWinner = r.placement === 1;
-          // Calcula delta usando streaks atuais (antes de atualizar), depois atualiza streaks
+        // Ranked APENAS em 1v1. Em multi-player nao calcula PDS nem
+        // rankedStats — todos sobreviventes empatam como vencedores, nao
+        // ha placement distintivo. Defense in depth: DTO ja bloqueia
+        // criar sala ranked com >2 jogadores.
+        if (room.isRanked && totalPlayers === 2) {
+          // Em 1v1 isWinner === (placement === 1), mesma matematica de antes
           pdsDelta = calcPdsChange(r.placement, totalPlayers, user.winStreak ?? 0, user.lossStreak ?? 0);
           newPds = clampPds((user.pds ?? 0) + pdsDelta, user.pds ?? 0);
           if (isWinner) {
@@ -613,11 +635,13 @@ export class RoomsService {
       };
     }
 
-    // Incrementa sessionWins do vencedor antes de deletar efêmeros
-    const winner = results.find(r => r.placement === 1);
-    if (winner && !ephemeralIds.has(winner.userId)) {
+    // Incrementa sessionWins de TODOS os vencedores antes de deletar efêmeros.
+    // Em 1v1 sera 1 vencedor; em multi-player podem ser varios (todos menos
+    // o perdedor que zerou pratos).
+    const winners = results.filter(r => (r.isWinner ?? (r.placement === 1)) && !ephemeralIds.has(r.userId));
+    for (const w of winners) {
       await this.prisma.roomPlayer.updateMany({
-        where: { roomId: room.id, userId: winner.userId },
+        where: { roomId: room.id, userId: w.userId },
         data: { sessionWins: { increment: 1 } },
       }).catch(() => {});
     }

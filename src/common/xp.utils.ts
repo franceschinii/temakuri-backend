@@ -14,18 +14,34 @@ export function computeLevel(totalXp: number): number {
   return level;
 }
 
-export function xpGain(placement: number, totalPlayers: number): number {
-  const tables: Record<number, Record<number, number>> = {
-    2: { 1: 35, 2: 10 },
-    3: { 1: 40, 2: 25, 3: 10 },
-    4: { 1: 50, 2: 30, 3: 20, 4: 10 },
-  };
-  const count = Math.min(Math.max(totalPlayers, 2), 4);
-  return tables[count]?.[placement] ?? 10;
+/**
+ * Recompensa por desempenho. Nova regra: so existe 1 perdedor por partida
+ * (o que zerou os pratos). Todos os outros sao vencedores e recebem o mesmo
+ * valor base. Por isso usamos `isWinner` em vez de placement.
+ *
+ * Multiplicadores adicionais (1v1, ranked) sao aplicados em rooms.service.
+ */
+export function xpGain(isWinner: boolean, totalPlayers: number): number {
+  const winners: Record<number, number> = { 2: 35, 3: 40, 4: 50, 5: 55, 6: 60 };
+  const count = Math.min(Math.max(totalPlayers, 2), 6);
+  if (isWinner) return winners[count] ?? 35;
+  return 10;
 }
 
-export function coinsGain(placement: number, totalPlayers: number): number {
-  if (totalPlayers === 2) return placement === 1 ? 4 : 1;
-  if (totalPlayers === 3) return ({ 1: 4, 2: 2, 3: 1 } as Record<number, number>)[placement] ?? 1;
-  return ({ 1: 6, 2: 3, 3: 2, 4: 1 } as Record<number, number>)[placement] ?? 1;
+export function coinsGain(isWinner: boolean, totalPlayers: number): number {
+  const winners: Record<number, number> = { 2: 4, 3: 4, 4: 6, 5: 7, 6: 8 };
+  const count = Math.min(Math.max(totalPlayers, 2), 6);
+  if (isWinner) return winners[count] ?? 4;
+  return 1;
+}
+
+/**
+ * Multiplicador de moedas: 1v1 paga +50%, ranqueada paga +50%.
+ * Combinados (ranked 1v1) ficam em +125% (1.5 * 1.5 = 2.25).
+ */
+export function coinsMultiplier(totalPlayers: number, isRanked: boolean): number {
+  let mult = 1;
+  if (totalPlayers === 2) mult *= 1.5;
+  if (isRanked) mult *= 1.5;
+  return mult;
 }

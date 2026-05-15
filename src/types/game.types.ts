@@ -47,6 +47,9 @@ export interface PublicPlayerState {
   isConnected: boolean;
   isEliminated: boolean;
   isReady: boolean;
+  // True quando o jogador zerou a mao na rodada atual. Reseta no inicio
+  // de cada rodada. Distinto de isEliminated (que persiste o jogo todo).
+  isOutOfRound?: boolean;
   sessionWins?: number;
   isSpectator?: boolean;
   isBot?: boolean;
@@ -81,6 +84,9 @@ export interface GameRanking {
   username: string;
   placement: number;
   tokensLeft: number;
+  // True = sobreviveu (tokensLeft > 0). Em multi-player, multiplos isWinner=true
+  // sao normais (so 1 perde). Em 1v1 e equivalente a placement === 1.
+  isWinner: boolean;
 }
 
 export interface GameStats {
