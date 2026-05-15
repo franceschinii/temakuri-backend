@@ -35,9 +35,9 @@ const PURCHASABLE_MODES = ['MERCADO', 'RODIZIO', 'DEGUSTACAO'];
 const THEME_PRICES: Record<string, number> = {
   bambu: 0,
   oceano: 50,
-  sakura: 100,
+  sakura: 75,
   oni: 150,
-  corinthians: 200,
+  corinthians: 100,
 };
 const THEME_NAMES: Record<string, string> = {
   bambu: 'Bambu Verde',
