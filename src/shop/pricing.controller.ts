@@ -19,6 +19,7 @@ const DEFAULTS: { kind: PriceKind; key: string; label: string; unit: string; def
   { kind: 'avatar_diamonds', key: '12', label: 'Avatar Geisha', unit: 'diamantes', def: 80 },
   { kind: 'avatar_diamonds', key: '13', label: 'Avatar Samurai', unit: 'diamantes', def: 80 },
   { kind: 'avatar_diamonds', key: '14', label: 'Avatar Dragão Dourado', unit: 'diamantes', def: 300 },
+  { kind: 'avatar_diamonds', key: '15', label: 'Avatar Corinthians', unit: 'diamantes', def: 100 },
   { kind: 'mode', key: 'MERCADO', label: 'Modo Mercado', unit: 'moedas', def: 20 },
   { kind: 'mode', key: 'RODIZIO', label: 'Modo Rodízio', unit: 'moedas', def: 30 },
   { kind: 'mode', key: 'DEGUSTACAO', label: 'Modo Degustação', unit: 'moedas', def: 50 },

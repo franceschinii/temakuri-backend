@@ -14,6 +14,7 @@ const AVATAR_DIAMOND_PRICES: Record<number, number> = {
   12: 80, // Geisha
   13: 80, // Samurai
   14: 300, // Dragao Dourado
+  15: 100, // Corinthians
 };
 
 const MODE_PRICES: Record<string, number> = { MERCADO: 20, RODIZIO: 30, DEGUSTACAO: 50 };
@@ -27,11 +28,6 @@ const AVATAR_NAMES: Record<number, string> = {
 };
 
 const ALL_AVATARS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-
-// Avatar 15 e um brinde: liberado automaticamente pra quem possui o
-// tema corinthians (bundle). Nao tem preco proprio — nao aparece como
-// comprável, so como "owned" quando o tema esta no inventario.
-const AVATAR_BUNDLED_WITH_THEME: Record<number, string> = { 15: 'corinthians' };
 const PURCHASABLE_MODES = ['MERCADO', 'RODIZIO', 'DEGUSTACAO'];
 
 // Temas de mesa. Bambu Verde e o tema padrao gratuito (preco 0,
@@ -106,16 +102,7 @@ export class ShopService {
   }
 
   async getInventory(userId: string) {
-    const inv = await this.getOrCreateInventory(userId);
-    // Avatares de bundle (ex: 15 -> tema corinthians) sao expostos como
-    // desbloqueados quando o usuario possui o tema vinculado. Mantem
-    // consistencia: qualquer tela que le o inventory ve o avatar liberado.
-    const bundled = Object.entries(AVATAR_BUNDLED_WITH_THEME)
-      .filter(([, theme]) => inv.unlockedThemes.includes(theme))
-      .map(([idx]) => Number(idx))
-      .filter(idx => !inv.unlockedAvatars.includes(idx));
-    if (bundled.length === 0) return inv;
-    return { ...inv, unlockedAvatars: [...inv.unlockedAvatars, ...bundled] };
+    return this.getOrCreateInventory(userId);
   }
 
   async getCatalog(userId: string) {
@@ -127,22 +114,15 @@ export class ShopService {
     });
 
     const avatars = ALL_AVATARS.map(index => {
-      const bundledTheme = AVATAR_BUNDLED_WITH_THEME[index];
-      // Avatar de bundle: owned se o user possui o tema vinculado.
-      // Tema padrao gratuito (bambu) nao conta; precisa ter o tema do
-      // bundle especificamente desbloqueado.
-      const ownedViaBundle = bundledTheme
-        ? inv.unlockedThemes.includes(bundledTheme)
-        : false;
       const inDiamond = AVATAR_DIAMOND_PRICES[index] !== undefined;
       return {
         type: 'avatar' as const,
         index,
         name: AVATAR_NAMES[index] ?? `Avatar ${index}`,
-        price: bundledTheme ? 0 : (inDiamond ? this.avatarDiamondPrice(index) : this.avatarCoinPrice(index)),
+        price: inDiamond ? this.avatarDiamondPrice(index) : this.avatarCoinPrice(index),
         currency: inDiamond ? ('diamonds' as const) : ('coins' as const),
-        owned: inv.unlockedAvatars.includes(index) || ownedViaBundle,
-        free: index <= 3 || !!bundledTheme,
+        owned: inv.unlockedAvatars.includes(index),
+        free: index <= 3,
       };
     });
 
