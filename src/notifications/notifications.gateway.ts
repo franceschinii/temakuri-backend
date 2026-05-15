@@ -38,6 +38,15 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   getOnlineCount(): number {
     return this.userSockets.size;
   }
+
+  /** IDs dos usuarios com ao menos 1 socket aberto. Usado pelo admin pra marcar presenca. */
+  getOnlineUserIds(): string[] {
+    return Array.from(this.userSockets.keys());
+  }
+
+  isUserOnline(userId: string): boolean {
+    return this.userSockets.has(userId);
+  }
   private roomSockets = new Map<string, Set<AuthenticatedSocket>>();
   private roomBots = new Map<string, Set<string>>(); // roomCode → Set<botUserId>
   private turnTimers = new Map<string, NodeJS.Timeout>(); // roomCode → timer
@@ -705,6 +714,31 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     const currentUserId = engine.currentTurnUserId();
     if (!bots.has(currentUserId)) return;
 
+    // Fire-and-forget: busca a dificuldade do bot e agenda com delay
+    // proporcional. Fail-safe: se a query falhar, usa 'medium'.
+    this.prisma.user.findUnique({
+      where: { id: currentUserId },
+      select: { botDifficulty: true },
+    }).then(u => {
+      const raw = u?.botDifficulty;
+      const difficulty: 'easy' | 'medium' | 'hard' =
+        raw === 'medium' || raw === 'hard' ? raw : 'easy';
+      // Velocidade: easy mais rapido, hard "pensa" mais. Variacao leve
+      // (jitter) pra nao parecer mecanico.
+      const baseDelay = difficulty === 'easy' ? 700 : difficulty === 'hard' ? 1600 : 1000;
+      const delay = baseDelay + Math.floor(Math.random() * 400);
+      this.scheduleBotMoveWithDelay(roomCode, currentUserId, difficulty, delay);
+    }).catch(() => {
+      this.scheduleBotMoveWithDelay(roomCode, currentUserId, 'easy', 700);
+    });
+  }
+
+  private scheduleBotMoveWithDelay(
+    roomCode: string,
+    currentUserId: string,
+    difficulty: 'easy' | 'medium' | 'hard',
+    delay: number,
+  ) {
     setTimeout(() => {
       const currentEngine = this.roomManager.get(roomCode);
       if (!currentEngine || currentEngine.isGameOver()) return;
@@ -723,7 +757,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
           const insertAt = Math.floor(Math.random() * (state.myHand.length + 1));
           result = currentEngine.applyInsertDrawn(currentUserId, insertAt);
         } else {
-          const move = currentEngine.computeBotMove(currentUserId);
+          const move = currentEngine.computeBotMove(currentUserId, difficulty);
           if (move.action === 'play') {
             result = currentEngine.applyPlayCards(currentUserId, move.cardIndices);
           } else {
@@ -771,7 +805,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
           this.scheduleBotMoveIfNeeded(roomCode, currentEngine);
         }
       }
-    }, 900); // bot age rapido; frontend que segura turn_started para visualizar
+    }, delay);
   }
 
   private async applyRankedAbandonmentIfNeeded(userId: string, roomCode: string) {

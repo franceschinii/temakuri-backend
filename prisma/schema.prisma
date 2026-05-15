@@ -32,6 +32,9 @@ model User {
   lastPremiumGrantAt     DateTime?
   externalCustomerId     String?   @unique
   activeTheme            String?
+  /// Para bots: 'easy' | 'medium' | 'hard'. Para humanos: null.
+  /// Controla a IA do bot (heuristica e velocidade de jogada).
+  botDifficulty          String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 

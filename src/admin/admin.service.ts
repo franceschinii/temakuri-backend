@@ -3,6 +3,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RoomsService } from '../rooms/rooms.service.js';
+import { NotificationsGateway } from '../notifications/notifications.gateway.js';
 import { UpdateUserDto, ResetPasswordDto, UpdateStatsDto, ModerationDto, UpdateProgressionDto } from './dto/admin.dto.js';
 
 const USER_SELECT = {
@@ -49,6 +50,7 @@ export class AdminService {
     private prisma: PrismaService,
     private roomsService: RoomsService,
     private events: EventEmitter2,
+    private gateway: NotificationsGateway,
   ) {}
 
   async findAllRooms() {
@@ -114,10 +116,12 @@ export class AdminService {
   }
 
   async findAllUsers() {
-    return this.prisma.user.findMany({
+    const users = await this.prisma.user.findMany({
       select: USER_SELECT,
       orderBy: { createdAt: 'asc' },
     });
+    const onlineSet = new Set(this.gateway.getOnlineUserIds());
+    return users.map(u => ({ ...u, isOnline: onlineSet.has(u.id) }));
   }
 
   async findUser(id: string) {

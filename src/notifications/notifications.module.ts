@@ -9,5 +9,6 @@ import { RoomsModule } from '../rooms/rooms.module.js';
   imports: [JwtModule.register({}), RoomsModule],
   providers: [NotificationsGateway, RoomManager],
   controllers: [PresenceController],
+  exports: [NotificationsGateway],
 })
 export class NotificationsModule {}

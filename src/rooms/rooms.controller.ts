@@ -34,8 +34,12 @@ export class RoomsController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Add a bot to the room (host only)' })
-  addBot(@CurrentUser('id') userId: string, @Param('code') code: string) {
-    return this.roomsService.addBot(code, userId);
+  addBot(
+    @CurrentUser('id') userId: string,
+    @Param('code') code: string,
+    @Body() body?: { difficulty?: 'easy' | 'medium' | 'hard' },
+  ) {
+    return this.roomsService.addBot(code, userId, body?.difficulty);
   }
 
   @Delete(':code/bots/:botId')

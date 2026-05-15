@@ -892,20 +892,39 @@ export class GameEngine {
     return this.currentPlayer().userId;
   }
 
-  computeBotMove(userId: string): { action: 'play'; cardIndices: number[] } | { action: 'pass'; insertAtIndex: number } {
+  /**
+   * Calcula uma jogada para um bot. A heuristica varia por dificuldade:
+   *
+   * - easy: pega o PRIMEIRO grupo adjacente de mesmo valor que e legal.
+   *   Sem estrategia — comportamento original.
+   *
+   * - medium: enumera TODOS os grupos legais e escolhe o MAIOR (mais
+   *   cartas saem por jogada). Respeita Sabor ativo.
+   *
+   * - hard: alem de preferir o maior grupo, se a melhor jogada e de
+   *   apenas 1 carta E existem outras iguais escondidas na mao E a pilha
+   *   esta baixa (<=2 cartas), passa estrategicamente pra tentar reunir
+   *   combo. Heuristica simples — TODO: tunar com feedback real do jogo.
+   *
+   * Default (bots pre-migration sem difficulty) = easy.
+   */
+  computeBotMove(
+    userId: string,
+    difficulty: 'easy' | 'medium' | 'hard' = 'easy',
+  ): { action: 'play'; cardIndices: number[] } | { action: 'pass'; insertAtIndex: number } {
     const player = this.findPlayer(userId);
     if (!player) return { action: 'pass', insertAtIndex: 0 };
 
     const hand = player.hand;
 
-    // Group adjacent indices by value
+    // Enumera todos os grupos adjacentes de mesmo valor que sao legais.
+    const legalGroups: { indices: number[]; value: number; size: number }[] = [];
     for (let start = 0; start < hand.length; start++) {
       const group: number[] = [start];
       for (let j = start + 1; j < hand.length; j++) {
         if (hand[j].value === hand[start].value) group.push(j);
         else break;
       }
-
       const validation = validatePlayIndices(
         hand,
         group,
@@ -913,11 +932,41 @@ export class GameEngine {
         this.saborActive,
         this.saborMinRequired,
       );
-
-      if (validation.valid) return { action: 'play', cardIndices: group };
+      if (validation.valid) {
+        legalGroups.push({ indices: group, value: hand[start].value, size: group.length });
+      }
     }
 
-    // No legal play — pass (insert drawn card at end of hand)
-    return { action: 'pass', insertAtIndex: player.hand.length };
+    if (legalGroups.length === 0) {
+      return { action: 'pass', insertAtIndex: player.hand.length };
+    }
+
+    if (difficulty === 'easy') {
+      // Primeiro grupo legal — comportamento original.
+      const g = legalGroups[0];
+      return { action: 'play', cardIndices: g.indices };
+    }
+
+    // medium e hard: escolhe o maior grupo (em empate, o primeiro).
+    let best = legalGroups[0];
+    for (const g of legalGroups) {
+      if (g.size > best.size) best = g;
+    }
+
+    if (difficulty === 'medium') {
+      return { action: 'play', cardIndices: best.indices };
+    }
+
+    // hard: se a melhor jogada e de 1 carta E ha cartas iguais escondidas
+    // na mao (nao adjacentes) E pilha calma E sem sabor, passa pra reunir
+    // combo melhor. TODO: tunar threshold com feedback.
+    if (best.size === 1 && this.pile.length <= 2 && !this.saborActive) {
+      const totalSameValue = hand.filter(c => c.value === best.value).length;
+      if (totalSameValue >= 2) {
+        return { action: 'pass', insertAtIndex: player.hand.length };
+      }
+    }
+
+    return { action: 'play', cardIndices: best.indices };
   }
 }

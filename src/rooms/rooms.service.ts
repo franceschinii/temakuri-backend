@@ -339,7 +339,10 @@ export class RoomsService {
     if (!room.isPrivate) this.events.emit('rooms.public.changed');
   }
 
-  async addBot(code: string, hostUserId: string) {
+  async addBot(code: string, hostUserId: string, difficulty?: 'easy' | 'medium' | 'hard') {
+    const safeDifficulty = ['easy', 'medium', 'hard'].includes(difficulty ?? '')
+      ? difficulty!
+      : 'easy';
     const room = await this.prisma.room.findUnique({
       where: { code },
       include: { players: true },
@@ -377,7 +380,7 @@ export class RoomsService {
 
       try {
         bot = await this.prisma.user.create({
-          data: { username, isBot: true, isGuest: true },
+          data: { username, isBot: true, isGuest: true, botDifficulty: safeDifficulty },
         });
         break;
       } catch (err) {
@@ -822,6 +825,7 @@ export class RoomsService {
         isAdmin: rp.user?.isAdmin ?? false,
         isSpectator: false,
         sessionWins: rp.sessionWins ?? 0,
+        botDifficulty: rp.user?.isBot ? (rp.user?.botDifficulty ?? 'easy') : null,
       })),
     };
   }
