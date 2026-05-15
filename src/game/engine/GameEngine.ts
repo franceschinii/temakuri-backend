@@ -648,6 +648,74 @@ export class GameEngine {
     };
   }
 
+  /**
+   * Jogador abandonou a partida em andamento. Tratado como derrota: vira
+   * eliminado (igual a perder todos os pratos). A mao dele vai pro
+   * descarte. Se era a vez dele, o turno avanca. Se a saida deixa <= 1
+   * jogador ativo, o jogo termina. Se deixa exatamente 1 jogador EM
+   * rodada (mas ainda ha >= 2 no jogo), encerra a rodada com esse como
+   * perdedor. Retorna os eventos resultantes (pode incluir game_over).
+   */
+  removePlayerFromGame(userId: string): EngineEvent[] {
+    const p = this.findPlayer(userId);
+    if (!p || p.isEliminated) return [];
+
+    // Se era o jogador da vez, precisamos avancar o turno DEPOIS de
+    // marca-lo eliminado. Guarda se era a vez dele.
+    const wasCurrent =
+      this.phase === 'PLAYER_TURN' && this.currentPlayer()?.userId === userId;
+
+    // Devolve a mao ao descarte (integridade: cartas nao podem sumir).
+    if (p.hand.length > 0) {
+      this.discardPile.push(...p.hand);
+      p.hand = [];
+    }
+    p.isEliminated = true;
+    p.isOutOfRound = true;
+    p.tokensLeft = 0;
+    this.pendingDraws.delete(userId);
+
+    const events: EngineEvent[] = [
+      { type: 'game:player_left', payload: { userId } },
+    ];
+
+    const active = this.activePlayers();
+
+    // Sobrou 0 ou 1 jogador no jogo todo → fim de jogo. O ultimo
+    // (se houver) eh o vencedor; o que saiu eh o perdedor.
+    if (active.length <= 1) {
+      // resolveGameOver espera o loserId. O que saiu eh o perdedor.
+      return [...events, ...this.resolveGameOver(userId)];
+    }
+
+    // Ainda ha >= 2 ativos. Se o que saiu travou a vez, ou se agora so
+    // resta 1 jogador EM rodada (os outros ja zeraram a mao), resolve.
+    const inRound = this.playersInRound();
+    if (inRound.length <= 1) {
+      const loser = inRound[0];
+      if (loser) {
+        return [...events, ...this.resolveRoundEnd(loser.userId)];
+      }
+      // Ninguem em rodada (todos zeraram / sairam) — comeca proxima.
+      this.lastWiperId = null;
+      return [...events, ...this.startRound()];
+    }
+
+    // Jogo continua. Se era a vez do que saiu, avanca o turno.
+    if (wasCurrent && this.phase === 'PLAYER_TURN') {
+      // Se o que saiu estava com a pile na mesa (lastPlayerId), limpa
+      // pra nao deixar pile orfa bloqueando a proxima jogada.
+      this.advanceTurn();
+      events.push({
+        type: 'game:turn_started',
+        payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS },
+      });
+    }
+
+    this.assertCardIntegrity();
+    return events;
+  }
+
   setPlayerConnected(userId: string, connected: boolean): EngineEvent[] {
     const p = this.findPlayer(userId);
     if (!p) return [];

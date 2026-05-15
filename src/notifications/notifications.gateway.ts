@@ -354,6 +354,26 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
     this.clearTurnTimer(data.roomCode);
 
+    // Se ha partida em andamento, aplica o abandono no engine ANTES de
+    // mexer no DB: o jogador vira eliminado (derrota), o turno avanca se
+    // era a vez dele, e a partida pode terminar (game over) se sobrar 1.
+    // Sem isso o jogador ficava "fantasma" na mesa, travando os outros.
+    const engineBeforeLeave = this.roomManager.get(data.roomCode);
+    if (engineBeforeLeave && !engineBeforeLeave.isGameOver() && engineBeforeLeave.hasPlayer(client.userId)) {
+      const leaveEvents = engineBeforeLeave.removePlayerFromGame(client.userId);
+      if (leaveEvents.length > 0) {
+        this.dispatchEvents(data.roomCode, leaveEvents);
+        if (engineBeforeLeave.isGameOver()) {
+          // Aguarda markFinished ANTES do leaveRoom: o jogador que saiu
+          // precisa estar no DB pra a derrota ser registrada (markFinished
+          // ignora quem ja saiu da sala).
+          await this.finalizeGameOver(data.roomCode, leaveEvents);
+        } else {
+          this.scheduleBotMoveIfNeeded(data.roomCode, engineBeforeLeave);
+        }
+      }
+    }
+
     await this.roomsService.leaveRoom(client.userId, data.roomCode);
     client.roomCode = undefined;
 
@@ -712,23 +732,26 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
    * (procura game:game_over). Mesma logica dos 3 call-sites existentes,
    * usado pelo caminho de recuperacao de turno travado.
    */
-  private finalizeGameOver(roomCode: string, events: { type: string; payload: Record<string, unknown> }[]) {
+  private async finalizeGameOver(roomCode: string, events: { type: string; payload: Record<string, unknown> }[]) {
     const gameOverPayload = events.find(e => e.type === 'game:game_over')?.payload;
     const rankings = gameOverPayload?.['rankings'] as any[];
     const gameStats = gameOverPayload?.['stats'] as { saborTriggers: number; tricksWon: Record<string, number> } | undefined;
     if (!rankings) return;
     this.clearTurnTimer(roomCode);
-    this.roomsService.markFinished(roomCode, rankings.map(r => ({
-      userId: r.userId,
-      placement: r.placement,
-      tokensLeft: r.tokensLeft,
-      isWinner: r.isWinner,
-    })), gameStats).then(async (rewards) => {
+    try {
+      const rewards = await this.roomsService.markFinished(roomCode, rankings.map(r => ({
+        userId: r.userId,
+        placement: r.placement,
+        tokensLeft: r.tokensLeft,
+        isWinner: r.isWinner,
+      })), gameStats);
       const updatedRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
       if (updatedRoom) {
         this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
       }
-    }).catch(() => {});
+    } catch {
+      // markFinished idempotente; falha aqui nao deve travar o fluxo.
+    }
     setTimeout(() => {
       this.roomManager.destroy(roomCode);
       this.roomSockets.delete(roomCode);
