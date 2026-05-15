@@ -24,7 +24,10 @@ export class ShopPricingService {
   private readonly logger = new Logger(ShopPricingService.name);
   private cache = new Map<string, number>();
   private cacheLoadedAt = 0;
-  private static readonly TTL_MS = 30_000;
+  // Curto pra que mudancas do admin reflitam quase em tempo real na loja.
+  // O invalidate() ja limpa imediatamente, mas o TTL e a rede de seguranca
+  // pra outros pontos do codigo que leem sem warm() explicito.
+  private static readonly TTL_MS = 5_000;
 
   constructor(private prisma: PrismaService) {}
 
@@ -43,8 +46,14 @@ export class ShopPricingService {
     }
   }
 
-  /** Invalida o cache imediatamente (chamado apos admin editar preco). */
+  /**
+   * Invalida o cache imediatamente (chamado apos admin editar preco).
+   * Limpa o Map tambem — so zerar cacheLoadedAt nao basta porque o
+   * getPriceSync nao chama ensureCache; ele continuaria lendo valores
+   * velhos do Map cheio ate o proximo warm assincrono.
+   */
   invalidate() {
+    this.cache.clear();
     this.cacheLoadedAt = 0;
   }
 

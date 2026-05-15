@@ -115,11 +115,16 @@ export class ShopService {
 
     const avatars = ALL_AVATARS.map(index => {
       const inDiamond = AVATAR_DIAMOND_PRICES[index] !== undefined;
+      const defaultPrice = inDiamond
+        ? (AVATAR_DIAMOND_PRICES[index] ?? 0)
+        : (AVATAR_PRICES[index] ?? 0);
+      const price = inDiamond ? this.avatarDiamondPrice(index) : this.avatarCoinPrice(index);
       return {
         type: 'avatar' as const,
         index,
         name: AVATAR_NAMES[index] ?? `Avatar ${index}`,
-        price: inDiamond ? this.avatarDiamondPrice(index) : this.avatarCoinPrice(index),
+        price,
+        defaultPrice,
         currency: inDiamond ? ('diamonds' as const) : ('coins' as const),
         owned: inv.unlockedAvatars.includes(index),
         free: index <= 3,
@@ -131,6 +136,7 @@ export class ShopService {
       mode,
       name: mode.charAt(0) + mode.slice(1).toLowerCase(),
       price: this.modePrice(mode),
+      defaultPrice: MODE_PRICES[mode] ?? 0,
       currency: 'coins' as const,
       owned: inv.unlockedModes.includes(mode),
     }));
@@ -142,6 +148,7 @@ export class ShopService {
         key,
         name: THEME_NAMES[key] ?? key,
         price: isFree ? 0 : this.themePrice(key),
+        defaultPrice: isFree ? 0 : (THEME_PRICES[key] ?? 0),
         currency: 'diamonds' as const,
         // Temas gratuitos sao desbloqueados automaticamente para todos.
         owned: isFree || inv.unlockedThemes.includes(key),
@@ -154,6 +161,7 @@ export class ShopService {
       sku,
       coins: p.coins,
       price: this.coinPackDiamonds(sku),
+      defaultPrice: p.diamonds,
       currency: 'diamonds' as const,
     }));
 
@@ -163,6 +171,7 @@ export class ShopService {
         sku: 'RESET_RANKED_WARNINGS' as const,
         name: 'Limpar avisos ranked',
         price: this.utilityPrice('RESET_RANKED_WARNINGS'),
+        defaultPrice: UTILITY_PRICES.RESET_RANKED_WARNINGS,
         currency: 'diamonds' as const,
       },
       {
@@ -170,6 +179,7 @@ export class ShopService {
         sku: 'RESET_LOSS_STREAK' as const,
         name: 'Zerar streak de derrotas',
         price: this.utilityPrice('RESET_LOSS_STREAK'),
+        defaultPrice: UTILITY_PRICES.RESET_LOSS_STREAK,
         currency: 'diamonds' as const,
       },
     ];
