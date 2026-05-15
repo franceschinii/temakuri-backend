@@ -166,6 +166,12 @@ export class PaymentsService {
       // Fallback (sem plano pre-cadastrado): cria preapproval avulsa via API.
       // Funciona porque sem preapproval_plan_id o MP aceita auto_recurring
       // inline e gera init_point sem exigir card_token_id.
+      // Aplica override do admin (kind=premium_brl) caso definido.
+      const effectivePrice = await this.pricing.getPrice(
+        'premium_brl',
+        PREMIUM_MONTHLY.sku,
+        PREMIUM_MONTHLY.priceBrl,
+      );
       const body: any = {
         payer_email: user.email,
         back_url: urls.success,
@@ -174,7 +180,7 @@ export class PaymentsService {
         auto_recurring: {
           frequency: 1,
           frequency_type: 'months',
-          transaction_amount: PREMIUM_MONTHLY.priceBrl,
+          transaction_amount: effectivePrice,
           currency_id: 'BRL',
         },
       };

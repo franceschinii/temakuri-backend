@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ShopPricingService } from './pricing.service.js';
+import { DIAMOND_PACKS, PREMIUM_MONTHLY } from '../payments/catalog.js';
 
 // Avatares pagaveis em coins (catalogo legado — slots 4 a 8)
 const AVATAR_PRICES: Record<number, number> = { 4: 15, 5: 20, 6: 25, 7: 30, 8: 50 };
@@ -184,12 +185,34 @@ export class ShopService {
       },
     ];
 
+    // Pacotes pagos em BRL (Mercado Pago). Expostos no catalogo pra que o
+    // override do admin (kind=diamond_pack_brl) seja refletido na loja com
+    // preco riscado + badge de desconto.
+    const diamondPacks = Object.values(DIAMOND_PACKS).map(p => ({
+      type: 'diamond_pack_brl' as const,
+      sku: p.sku,
+      diamonds: p.diamonds,
+      bonus: p.bonus,
+      priceBrl: this.pricing.getPriceSync('diamond_pack_brl', p.sku, p.priceBrl),
+      defaultPriceBrl: p.priceBrl,
+    }));
+
+    const premium = {
+      type: 'premium_brl' as const,
+      sku: PREMIUM_MONTHLY.sku,
+      priceBrl: this.pricing.getPriceSync('premium_brl', PREMIUM_MONTHLY.sku, PREMIUM_MONTHLY.priceBrl),
+      defaultPriceBrl: PREMIUM_MONTHLY.priceBrl,
+      diamondsPerMonth: PREMIUM_MONTHLY.diamondsPerMonth,
+    };
+
     return {
       avatars,
       modes,
       themes,
       coinPacks,
       utilities,
+      diamondPacks,
+      premium,
       coins: user?.coins ?? 0,
       diamonds: user?.diamonds ?? 0,
       isPremium: user?.isPremium ?? false,
