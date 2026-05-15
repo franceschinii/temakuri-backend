@@ -32,6 +32,11 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   server: Server;
 
   private userSockets = new Map<string, Set<AuthenticatedSocket>>();
+
+  /** Numero de usuarios unicos online no momento (com ao menos 1 socket aberto). */
+  getOnlineCount(): number {
+    return this.userSockets.size;
+  }
   private roomSockets = new Map<string, Set<AuthenticatedSocket>>();
   private roomBots = new Map<string, Set<string>>(); // roomCode → Set<botUserId>
   private turnTimers = new Map<string, NodeJS.Timeout>(); // roomCode → timer
