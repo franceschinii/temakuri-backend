@@ -25,6 +25,7 @@ const DEFAULTS: { kind: PriceKind; key: string; label: string; unit: string; def
   { kind: 'theme', key: 'oceano', label: 'Tema Oceano', unit: 'diamantes', def: 50 },
   { kind: 'theme', key: 'sakura', label: 'Tema Sakura', unit: 'diamantes', def: 100 },
   { kind: 'theme', key: 'oni', label: 'Tema Oni', unit: 'diamantes', def: 150 },
+  { kind: 'theme', key: 'corinthians', label: 'Tema Corinthians', unit: 'diamantes', def: 200 },
   { kind: 'coin_pack_diamonds', key: 'COIN_PACK_50', label: 'Pacote 50 moedas', unit: 'diamantes', def: 5 },
   { kind: 'coin_pack_diamonds', key: 'COIN_PACK_200', label: 'Pacote 200 moedas', unit: 'diamantes', def: 15 },
   { kind: 'coin_pack_diamonds', key: 'COIN_PACK_700', label: 'Pacote 700 moedas', unit: 'diamantes', def: 40 },

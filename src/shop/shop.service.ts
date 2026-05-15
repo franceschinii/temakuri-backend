@@ -35,15 +35,17 @@ const THEME_PRICES: Record<string, number> = {
   oceano: 50,
   sakura: 100,
   oni: 150,
+  corinthians: 200,
 };
 const THEME_NAMES: Record<string, string> = {
   bambu: 'Bambu Verde',
   oceano: 'Oceano',
   sakura: 'Sakura',
   oni: 'Oni',
+  corinthians: 'Corinthians',
 };
 const FREE_THEMES = new Set(['bambu']);
-const ALL_THEMES = ['bambu', 'oceano', 'sakura', 'oni'];
+const ALL_THEMES = ['bambu', 'oceano', 'sakura', 'oni', 'corinthians'];
 
 // Pacotes de coins comprados com diamantes
 const COIN_PACKS: Record<string, { coins: number; diamonds: number }> = {
