@@ -13,8 +13,8 @@ export class PaymentsController {
   }
 
   @Post('diamonds/checkout')
-  diamondsCheckout(@Request() req: any, @Body() body: { sku: string }) {
-    return this.payments.createDiamondCheckout(req.user.id, body.sku);
+  diamondsCheckout(@Request() req: any, @Body() body: { sku: string; couponCode?: string }) {
+    return this.payments.createDiamondCheckout(req.user.id, body.sku, body.couponCode);
   }
 
   @Post('premium/checkout')

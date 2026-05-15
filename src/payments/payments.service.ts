@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, ServiceUnavailableException, Logger, N
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MpService } from './mp.service.js';
 import { DIAMOND_PACKS, type DiamondPackSku, PREMIUM_MONTHLY } from './catalog.js';
+import { CouponsService } from '../coupons/coupons.service.js';
 
 /**
  * Orquestra criacao de Preferencias (Checkout Pro) e PreApprovals
@@ -16,6 +17,7 @@ export class PaymentsService {
   constructor(
     private prisma: PrismaService,
     private mp: MpService,
+    private coupons: CouponsService,
   ) {}
 
   private get isEnabled(): boolean {
@@ -44,7 +46,7 @@ export class PaymentsService {
    * Cria preferencia de Checkout Pro para compra one-time de diamantes.
    * Retorna init_point (URL para redirecionar o usuario).
    */
-  async createDiamondCheckout(userId: string, sku: string): Promise<{ url: string }> {
+  async createDiamondCheckout(userId: string, sku: string, couponCode?: string): Promise<{ url: string }> {
     this.requireEnabled();
     const pack = DIAMOND_PACKS[sku as DiamondPackSku];
     if (!pack) throw new BadRequestException('SKU inválido.');
@@ -55,8 +57,22 @@ export class PaymentsService {
     });
     if (!user) throw new NotFoundException('Usuário não encontrado.');
 
+    // Aplica cupom se enviado e valido. Externalreference carrega o id pra
+    // que o webhook possa registrar a redemption ao confirmar a compra.
+    let unitPrice = pack.priceBrl;
+    let couponSegment = '';
+    if (couponCode) {
+      const validation = await this.coupons.validate(couponCode, 'diamonds', userId);
+      if (!validation.valid) {
+        throw new BadRequestException(`Cupom inválido: ${validation.reason}`);
+      }
+      const discount = (pack.priceBrl * validation.discountPercent!) / 100;
+      unitPrice = Math.max(0.5, Math.round((pack.priceBrl - discount) * 100) / 100);
+      couponSegment = `|coupon:${validation.couponId}`;
+    }
+
     const urls = this.getBaseUrls();
-    const externalReference = `user:${userId}|sku:${sku}`;
+    const externalReference = `user:${userId}|sku:${sku}${couponSegment}`;
     const payerName = user.username ?? 'Comprador';
 
     try {
@@ -69,7 +85,7 @@ export class PaymentsService {
               description: `${pack.diamonds} diamantes Temakuri para uso no jogo`,
               category_id: 'virtual_goods',
               quantity: 1,
-              unit_price: pack.priceBrl,
+              unit_price: unitPrice,
               currency_id: 'BRL',
             },
           ],
@@ -223,14 +239,14 @@ export class PaymentsService {
       this.logger.warn(`Payment ${paymentId} sem external_reference, pulando.`);
       return;
     }
-    // Formato: "user:<userId>|sku:<sku>"
-    const match = externalRef.match(/^user:([^|]+)\|sku:(.+)$/);
+    // Formato: "user:<userId>|sku:<sku>" ou "user:<userId>|sku:<sku>|coupon:<couponId>"
+    const match = externalRef.match(/^user:([^|]+)\|sku:([^|]+)(?:\|coupon:(.+))?$/);
     if (!match) {
       // Pode ser uma preapproval_authorized_payment (assinatura) — ignora aqui.
       this.logger.debug(`Payment ${paymentId} external_reference nao e de diamante: ${externalRef}`);
       return;
     }
-    const [, userId, sku] = match;
+    const [, userId, sku, couponId] = match;
     const pack = DIAMOND_PACKS[sku as DiamondPackSku];
     if (!pack) {
       this.logger.warn(`SKU ${sku} desconhecido no payment ${paymentId}`);
@@ -262,7 +278,24 @@ export class PaymentsService {
       }),
     ]);
 
-    this.logger.log(`+${pack.diamonds} diamantes para ${userId} via payment ${paymentId}`);
+    // Registra uso do cupom (se houve) — fora da transacao acima pq depende
+    // do paid_amount real do MP. Falha de redemption nao reverte a compra.
+    if (couponId) {
+      const paidAmount = Number(payment.transaction_amount ?? payment.transaction_details?.total_paid_amount ?? 0);
+      const discountValue = Math.max(0, pack.priceBrl - paidAmount);
+      try {
+        await this.coupons.recordRedemption({
+          couponId,
+          userId,
+          paymentSku: sku,
+          discountValue,
+        });
+      } catch (err: any) {
+        this.logger.warn(`Falha ao registrar redemption do cupom ${couponId}: ${err.message}`);
+      }
+    }
+
+    this.logger.log(`+${pack.diamonds} diamantes para ${userId} via payment ${paymentId}${couponId ? ` (cupom ${couponId})` : ''}`);
   }
 
   isPaymentsEnabled(): boolean {
