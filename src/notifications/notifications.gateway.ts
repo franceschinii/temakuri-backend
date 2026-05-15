@@ -707,12 +707,60 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.broadcastToRoomExcept(data.roomCode, client, 'game:message', { userId, username, text });
   }
 
+  /**
+   * Processa fim de jogo a partir de uma lista de eventos do engine
+   * (procura game:game_over). Mesma logica dos 3 call-sites existentes,
+   * usado pelo caminho de recuperacao de turno travado.
+   */
+  private finalizeGameOver(roomCode: string, events: { type: string; payload: Record<string, unknown> }[]) {
+    const gameOverPayload = events.find(e => e.type === 'game:game_over')?.payload;
+    const rankings = gameOverPayload?.['rankings'] as any[];
+    const gameStats = gameOverPayload?.['stats'] as { saborTriggers: number; tricksWon: Record<string, number> } | undefined;
+    if (!rankings) return;
+    this.clearTurnTimer(roomCode);
+    this.roomsService.markFinished(roomCode, rankings.map(r => ({
+      userId: r.userId,
+      placement: r.placement,
+      tokensLeft: r.tokensLeft,
+      isWinner: r.isWinner,
+    })), gameStats).then(async (rewards) => {
+      const updatedRoom = await this.roomsService.findByCode(roomCode).catch(() => null);
+      if (updatedRoom) {
+        this.broadcastToRoom(roomCode, 'lobby:game_over_summary', { rankings, room: updatedRoom, rewards });
+      }
+    }).catch(() => {});
+    setTimeout(() => {
+      this.roomManager.destroy(roomCode);
+      this.roomSockets.delete(roomCode);
+      this.roomBots.delete(roomCode);
+    }, 300_000);
+  }
+
   private scheduleBotMoveIfNeeded(roomCode: string, engine: import('../game/engine/GameEngine.js').GameEngine) {
     if (engine.isGameOver()) return;
-    const bots = this.roomBots.get(roomCode);
-    if (!bots?.size) return;
 
     const currentUserId = engine.currentTurnUserId();
+
+    // Blindagem contra travamento: se o turno caiu num jogador out-of-round
+    // (qualquer um — humano ou bot), recupera imediatamente. Sem isso, se
+    // for humano o jogo trava ate o timer; se for bot, o bot tenta jogar
+    // sem cartas. recoverStuckTurn avanca/encerra a rodada corretamente.
+    if (currentUserId && engine.isUserOutOfRound(currentUserId)) {
+      const recovery = engine.recoverStuckTurn();
+      if (recovery.length > 0) {
+        this.dispatchEvents(roomCode, recovery);
+        if (engine.isGameOver()) {
+          this.finalizeGameOver(roomCode, recovery);
+        } else {
+          // Re-checa: novo turno pode ser de bot.
+          this.scheduleBotMoveIfNeeded(roomCode, engine);
+        }
+      }
+      return;
+    }
+
+    const bots = this.roomBots.get(roomCode);
+    if (!bots?.size) return;
     if (!bots.has(currentUserId)) return;
 
     // Fire-and-forget: busca a dificuldade do bot e agenda com delay
@@ -1132,6 +1180,22 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       const engine = this.roomManager.get(roomCode);
       if (!engine || engine.isGameOver()) return;
       if (engine.currentTurnUserId() !== userId) return; // turn already advanced
+
+      // Blindagem: se o turno parou num jogador out-of-round (estado
+      // invalido — nao deve ocorrer com a logica nova, mas evita
+      // travamento permanente), recupera avancando/encerrando a rodada.
+      if (engine.isUserOutOfRound(userId)) {
+        const recovery = engine.recoverStuckTurn();
+        if (recovery.length > 0) {
+          this.dispatchEvents(roomCode, recovery);
+          if (engine.isGameOver()) {
+            this.finalizeGameOver(roomCode, recovery);
+          } else {
+            this.scheduleBotMoveIfNeeded(roomCode, engine);
+          }
+        }
+        return;
+      }
 
       // Auto-pass: handle TRICK_PICK, PASS_PICK, DUEL_PASS_PICK e turno normal
       let result: ReturnType<typeof engine.applyDrawCard>;

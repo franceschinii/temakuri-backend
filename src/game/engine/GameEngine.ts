@@ -695,7 +695,23 @@ export class GameEngine {
   private resolveWipe(wiperId: string): EngineEvent[] {
     // Regra: quando todos passam, a pile vai pro descarte automaticamente
     // e o último jogador (wiper) vira inicial com área vazia.
-    this.lastWiperId = wiperId;
+    const wiper = this.findPlayer(wiperId);
+
+    // Se o wiper zerou a mao (out-of-round), o turno NAO pode voltar pra
+    // ele — travaria (ele nao pode jogar/passar). Passa o turno pro
+    // proximo jogador ainda em rodada, em ordem de seat a partir do wiper.
+    let effectiveStarterId = wiperId;
+    if (!wiper || wiper.isOutOfRound) {
+      const active = this.activePlayers();
+      const wiperIdx = active.findIndex(p => p.userId === wiperId);
+      const startFrom = wiperIdx >= 0 ? wiperIdx : 0;
+      for (let i = 1; i <= active.length; i++) {
+        const cand = active[(startFrom + i) % active.length];
+        if (cand && !cand.isOutOfRound) { effectiveStarterId = cand.userId; break; }
+      }
+    }
+
+    this.lastWiperId = effectiveStarterId;
     this.tricksWon[wiperId] = (this.tricksWon[wiperId] ?? 0) + 1;
     this.consecutivePasses = 0;
     this.saborActive = false;
@@ -705,14 +721,15 @@ export class GameEngine {
     if (this.pile.length > 0) this.discardPile.push(...this.pile);
     this.pile = [];
 
-    const wiperIndex = this.activePlayers().findIndex(p => p.userId === wiperId);
-    this.currentTurnIndex = wiperIndex;
+    const starterIndex = this.activePlayers().findIndex(p => p.userId === effectiveStarterId);
+    this.currentTurnIndex = starterIndex >= 0 ? starterIndex : 0;
     this.phase = 'PLAYER_TURN';
 
     this.assertCardIntegrity();
     return [
+      // winnerId mantem o wiper real (quem ganhou a vaza) pro log/animacao.
       { type: 'game:wipe', payload: { winnerId: wiperId, pileCount: wipedCount } },
-      { type: 'game:turn_started', payload: { userId: wiperId, timeoutMs: TURN_TIMEOUT_MS } },
+      { type: 'game:turn_started', payload: { userId: effectiveStarterId, timeoutMs: TURN_TIMEOUT_MS } },
     ];
   }
 
@@ -965,6 +982,32 @@ export class GameEngine {
 
   currentTurnUserId(): string {
     return this.currentPlayer().userId;
+  }
+
+  isUserOutOfRound(userId: string): boolean {
+    return this.findPlayer(userId)?.isOutOfRound === true;
+  }
+
+  /**
+   * Recuperacao defensiva: se o turno atual aponta pra um jogador
+   * out-of-round (nao deveria acontecer com a logica nova, mas blinda
+   * contra travamento), avanca o turno pro proximo valido e retorna o
+   * evento turn_started. Retorna [] se nao precisou corrigir.
+   */
+  recoverStuckTurn(): EngineEvent[] {
+    if (this.phase !== 'PLAYER_TURN') return [];
+    const cur = this.currentPlayer();
+    if (!cur || !cur.isOutOfRound) return [];
+    // Se sobrou so 1 em rodada, encerra a rodada com ele como perdedor.
+    const inRound = this.playersInRound();
+    if (inRound.length <= 1) {
+      const loser = inRound[0];
+      if (loser) return this.resolveRoundEnd(loser.userId);
+      this.lastWiperId = null;
+      return this.startRound();
+    }
+    this.advanceTurn();
+    return [{ type: 'game:turn_started', payload: { userId: this.currentPlayer().userId, timeoutMs: TURN_TIMEOUT_MS } }];
   }
 
   /**
