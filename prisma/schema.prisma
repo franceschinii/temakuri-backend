@@ -205,6 +205,24 @@ model Coupon {
   @@index([validUntil])
 }
 
+/// Override de preco de item de catalogo, editavel pelo admin.
+/// Se nao existir override pra um (kind,key), o codigo usa o default
+/// hardcoded. kind: 'avatar_coins' | 'avatar_diamonds' | 'mode' |
+/// 'theme' | 'coin_pack' | 'utility' | 'diamond_pack' | 'premium'.
+/// price em centavos pra BRL (diamond_pack/premium) ou unidade direta
+/// (coins/diamonds) — interpretado pelo ShopPricingService.
+model CatalogPrice {
+  id        String   @id @default(cuid())
+  kind      String
+  key       String
+  price     Float
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@unique([kind, key])
+  @@index([kind])
+}
+
 /// Entrada do changelog gerenciada pelo admin. Substitui o array
 /// hardcoded antigo em src/data/changelog.ts do frontend.
 model ChangelogEntry {

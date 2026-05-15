@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { ShopPricingService } from './pricing.service.js';
 
 // Avatares pagaveis em coins (catalogo legado — slots 4 a 8)
 const AVATAR_PRICES: Record<number, number> = { 4: 15, 5: 20, 6: 25, 7: 30, 8: 50 };
@@ -59,7 +60,32 @@ const UTILITY_PRICES = {
 
 @Injectable()
 export class ShopService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private pricing: ShopPricingService,
+  ) {}
+
+  // Resolvem o preco efetivo (override do DB se existir, senao default
+  // hardcoded). Sincronos: getCatalog chama pricing.warm() antes, deixando
+  // o cache quente; purchases tambem (chamam resolve apos warm).
+  private avatarCoinPrice(i: number): number {
+    return this.pricing.getPriceSync('avatar_coins', i, AVATAR_PRICES[i] ?? 0);
+  }
+  private avatarDiamondPrice(i: number): number {
+    return this.pricing.getPriceSync('avatar_diamonds', i, AVATAR_DIAMOND_PRICES[i] ?? 0);
+  }
+  private modePrice(m: string): number {
+    return this.pricing.getPriceSync('mode', m, MODE_PRICES[m] ?? 0);
+  }
+  private themePrice(k: string): number {
+    return this.pricing.getPriceSync('theme', k, THEME_PRICES[k] ?? 0);
+  }
+  private coinPackDiamonds(sku: string): number {
+    return this.pricing.getPriceSync('coin_pack_diamonds', sku, COIN_PACKS[sku]?.diamonds ?? 0);
+  }
+  private utilityPrice(sku: string): number {
+    return this.pricing.getPriceSync('utility', sku, (UTILITY_PRICES as Record<string, number>)[sku] ?? 0);
+  }
 
   private async getOrCreateInventory(userId: string) {
     let inv = await this.prisma.userInventory.findUnique({ where: { userId } });
@@ -76,6 +102,7 @@ export class ShopService {
   }
 
   async getCatalog(userId: string) {
+    await this.pricing.warm();
     const inv = await this.getOrCreateInventory(userId);
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -88,7 +115,7 @@ export class ShopService {
         type: 'avatar' as const,
         index,
         name: AVATAR_NAMES[index] ?? `Avatar ${index}`,
-        price: inDiamond ? AVATAR_DIAMOND_PRICES[index] : (AVATAR_PRICES[index] ?? 0),
+        price: inDiamond ? this.avatarDiamondPrice(index) : this.avatarCoinPrice(index),
         currency: inDiamond ? ('diamonds' as const) : ('coins' as const),
         owned: inv.unlockedAvatars.includes(index),
         free: index <= 3,
@@ -99,7 +126,7 @@ export class ShopService {
       type: 'mode' as const,
       mode,
       name: mode.charAt(0) + mode.slice(1).toLowerCase(),
-      price: MODE_PRICES[mode] ?? 0,
+      price: this.modePrice(mode),
       currency: 'coins' as const,
       owned: inv.unlockedModes.includes(mode),
     }));
@@ -110,7 +137,7 @@ export class ShopService {
         type: 'theme' as const,
         key,
         name: THEME_NAMES[key] ?? key,
-        price: THEME_PRICES[key] ?? 0,
+        price: isFree ? 0 : this.themePrice(key),
         currency: 'diamonds' as const,
         // Temas gratuitos sao desbloqueados automaticamente para todos.
         owned: isFree || inv.unlockedThemes.includes(key),
@@ -122,7 +149,7 @@ export class ShopService {
       type: 'coin_pack' as const,
       sku,
       coins: p.coins,
-      price: p.diamonds,
+      price: this.coinPackDiamonds(sku),
       currency: 'diamonds' as const,
     }));
 
@@ -131,14 +158,14 @@ export class ShopService {
         type: 'utility' as const,
         sku: 'RESET_RANKED_WARNINGS' as const,
         name: 'Limpar avisos ranked',
-        price: UTILITY_PRICES.RESET_RANKED_WARNINGS,
+        price: this.utilityPrice('RESET_RANKED_WARNINGS'),
         currency: 'diamonds' as const,
       },
       {
         type: 'utility' as const,
         sku: 'RESET_LOSS_STREAK' as const,
         name: 'Zerar streak de derrotas',
-        price: UTILITY_PRICES.RESET_LOSS_STREAK,
+        price: this.utilityPrice('RESET_LOSS_STREAK'),
         currency: 'diamonds' as const,
       },
     ];
@@ -156,16 +183,21 @@ export class ShopService {
   }
 
   async purchaseAvatar(userId: string, avatarIndex: number) {
+    await this.pricing.warm();
     const inv = await this.getOrCreateInventory(userId);
     if (inv.unlockedAvatars.includes(avatarIndex)) {
       throw new BadRequestException('Avatar já desbloqueado');
     }
 
-    const coinPrice = AVATAR_PRICES[avatarIndex];
-    const diamondPrice = AVATAR_DIAMOND_PRICES[avatarIndex];
-    if (!coinPrice && !diamondPrice) {
+    // Determina a moeda pelo catalogo base (slots 9-14 = diamantes); o
+    // valor efetivo vem do helper (override ou default).
+    const isDiamondAvatar = AVATAR_DIAMOND_PRICES[avatarIndex] !== undefined;
+    const isCoinAvatar = AVATAR_PRICES[avatarIndex] !== undefined;
+    if (!isCoinAvatar && !isDiamondAvatar) {
       throw new BadRequestException('Avatar não disponível para compra');
     }
+    const coinPrice = isCoinAvatar ? this.avatarCoinPrice(avatarIndex) : 0;
+    const diamondPrice = isDiamondAvatar ? this.avatarDiamondPrice(avatarIndex) : 0;
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -174,7 +206,7 @@ export class ShopService {
     if (!user) throw new NotFoundException('Usuário não encontrado');
 
     // Avatares premium (slots 9-14) — gastam diamantes
-    if (diamondPrice) {
+    if (isDiamondAvatar) {
       if ((user.diamonds ?? 0) < diamondPrice) {
         throw new ForbiddenException(`Diamantes insuficientes (${user.diamonds ?? 0}/${diamondPrice})`);
       }
@@ -218,16 +250,17 @@ export class ShopService {
   }
 
   async purchaseMode(userId: string, mode: string) {
-    if (!MODE_PRICES[mode]) {
+    if (MODE_PRICES[mode] === undefined) {
       throw new BadRequestException('Modo não disponível para compra');
     }
+    await this.pricing.warm();
 
     const inv = await this.getOrCreateInventory(userId);
     if (inv.unlockedModes.includes(mode)) {
       throw new BadRequestException('Modo já desbloqueado');
     }
 
-    const price = MODE_PRICES[mode];
+    const price = this.modePrice(mode);
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { coins: true } });
     if (!user) throw new NotFoundException('Usuário não encontrado');
     if ((user.coins ?? 0) < price) {
@@ -252,14 +285,15 @@ export class ShopService {
     if (FREE_THEMES.has(themeKey)) {
       throw new BadRequestException('Tema gratuito não precisa ser comprado');
     }
-    if (!THEME_PRICES[themeKey]) {
+    if (THEME_PRICES[themeKey] === undefined) {
       throw new BadRequestException('Tema não disponível para compra');
     }
+    await this.pricing.warm();
     const inv = await this.getOrCreateInventory(userId);
     if (inv.unlockedThemes.includes(themeKey)) {
       throw new BadRequestException('Tema já desbloqueado');
     }
-    const price = THEME_PRICES[themeKey];
+    const price = this.themePrice(themeKey);
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { diamonds: true } });
     if (!user) throw new NotFoundException('Usuário não encontrado');
     if ((user.diamonds ?? 0) < price) {
@@ -313,36 +347,39 @@ export class ShopService {
     if (!pack) {
       throw new BadRequestException('Pacote de moedas não encontrado');
     }
+    await this.pricing.warm();
+    const diamondsCost = this.coinPackDiamonds(sku);
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { diamonds: true } });
     if (!user) throw new NotFoundException('Usuário não encontrado');
-    if ((user.diamonds ?? 0) < pack.diamonds) {
-      throw new ForbiddenException(`Diamantes insuficientes (${user.diamonds ?? 0}/${pack.diamonds})`);
+    if ((user.diamonds ?? 0) < diamondsCost) {
+      throw new ForbiddenException(`Diamantes insuficientes (${user.diamonds ?? 0}/${diamondsCost})`);
     }
 
     await this.prisma.$transaction([
       this.prisma.user.update({
         where: { id: userId },
-        data: { diamonds: { decrement: pack.diamonds }, coins: { increment: pack.coins } },
+        data: { diamonds: { decrement: diamondsCost }, coins: { increment: pack.coins } },
       }),
       this.prisma.diamondTransaction.create({
         data: {
           userId,
           type: 'SPEND',
-          amount: -pack.diamonds,
+          amount: -diamondsCost,
           description: `Conversão para ${pack.coins} moedas`,
           sku,
         },
       }),
     ]);
 
-    return { success: true, sku, coinsGained: pack.coins, diamondsSpent: pack.diamonds };
+    return { success: true, sku, coinsGained: pack.coins, diamondsSpent: diamondsCost };
   }
 
   async useUtility(userId: string, sku: string) {
-    const price = (UTILITY_PRICES as Record<string, number>)[sku];
-    if (!price) {
+    if ((UTILITY_PRICES as Record<string, number>)[sku] === undefined) {
       throw new BadRequestException('Utilitário não encontrado');
     }
+    await this.pricing.warm();
+    const price = this.utilityPrice(sku);
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { diamonds: true, rankedWarnings: true, lossStreak: true },

@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { MpService } from './mp.service.js';
 import { DIAMOND_PACKS, type DiamondPackSku, PREMIUM_MONTHLY } from './catalog.js';
 import { CouponsService } from '../coupons/coupons.service.js';
+import { ShopPricingService } from '../shop/pricing.service.js';
 
 /**
  * Orquestra criacao de Preferencias (Checkout Pro) e PreApprovals
@@ -18,6 +19,7 @@ export class PaymentsService {
     private prisma: PrismaService,
     private mp: MpService,
     private coupons: CouponsService,
+    private pricing: ShopPricingService,
   ) {}
 
   private get isEnabled(): boolean {
@@ -57,17 +59,18 @@ export class PaymentsService {
     });
     if (!user) throw new NotFoundException('Usuário não encontrado.');
 
-    // Aplica cupom se enviado e valido. Externalreference carrega o id pra
-    // que o webhook possa registrar a redemption ao confirmar a compra.
-    let unitPrice = pack.priceBrl;
+    // Preco base: override do admin (CatalogPrice) se existir, senao o
+    // default do catalog.ts. Cupom aplica sobre esse valor.
+    const basePrice = await this.pricing.getPrice('diamond_pack_brl', sku, pack.priceBrl);
+    let unitPrice = basePrice;
     let couponSegment = '';
     if (couponCode) {
       const validation = await this.coupons.validate(couponCode, 'diamonds', userId);
       if (!validation.valid) {
         throw new BadRequestException(`Cupom inválido: ${validation.reason}`);
       }
-      const discount = (pack.priceBrl * validation.discountPercent!) / 100;
-      unitPrice = Math.max(0.5, Math.round((pack.priceBrl - discount) * 100) / 100);
+      const discount = (basePrice * validation.discountPercent!) / 100;
+      unitPrice = Math.max(0.5, Math.round((basePrice - discount) * 100) / 100);
       couponSegment = `|coupon:${validation.couponId}`;
     }
 
