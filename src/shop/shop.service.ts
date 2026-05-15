@@ -23,9 +23,15 @@ const AVATAR_NAMES: Record<number, string> = {
   4: 'Sashimi', 5: 'Takoyaki', 6: 'Missô', 7: 'Udon', 8: 'Udon Gold',
   9: 'Yokai', 10: 'Kitsune', 11: 'Tanuki',
   12: 'Geisha', 13: 'Samurai', 14: 'Dragão Dourado',
+  15: 'Corinthians',
 };
 
-const ALL_AVATARS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+const ALL_AVATARS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+
+// Avatar 15 e um brinde: liberado automaticamente pra quem possui o
+// tema corinthians (bundle). Nao tem preco proprio — nao aparece como
+// comprável, so como "owned" quando o tema esta no inventario.
+const AVATAR_BUNDLED_WITH_THEME: Record<number, string> = { 15: 'corinthians' };
 const PURCHASABLE_MODES = ['MERCADO', 'RODIZIO', 'DEGUSTACAO'];
 
 // Temas de mesa. Bambu Verde e o tema padrao gratuito (preco 0,
@@ -112,15 +118,22 @@ export class ShopService {
     });
 
     const avatars = ALL_AVATARS.map(index => {
+      const bundledTheme = AVATAR_BUNDLED_WITH_THEME[index];
+      // Avatar de bundle: owned se o user possui o tema vinculado.
+      // Tema padrao gratuito (bambu) nao conta; precisa ter o tema do
+      // bundle especificamente desbloqueado.
+      const ownedViaBundle = bundledTheme
+        ? inv.unlockedThemes.includes(bundledTheme)
+        : false;
       const inDiamond = AVATAR_DIAMOND_PRICES[index] !== undefined;
       return {
         type: 'avatar' as const,
         index,
         name: AVATAR_NAMES[index] ?? `Avatar ${index}`,
-        price: inDiamond ? this.avatarDiamondPrice(index) : this.avatarCoinPrice(index),
+        price: bundledTheme ? 0 : (inDiamond ? this.avatarDiamondPrice(index) : this.avatarCoinPrice(index)),
         currency: inDiamond ? ('diamonds' as const) : ('coins' as const),
-        owned: inv.unlockedAvatars.includes(index),
-        free: index <= 3,
+        owned: inv.unlockedAvatars.includes(index) || ownedViaBundle,
+        free: index <= 3 || !!bundledTheme,
       };
     });
 
