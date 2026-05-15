@@ -231,6 +231,24 @@ export class RoomsService {
       throw new BadRequestException('Sala cheia.');
     }
 
+    // O usuario pode ter sido deletado entre a emissao do JWT e este join
+    // (ex: guest limpo por cleanup concorrente). Sem essa checagem o
+    // roomPlayer.create estoura FK RoomPlayer_userId_fkey e o cliente ve
+    // um erro tecnico cru.
+    const joiner = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+    if (!joiner) throw new UnauthorizedException('Sessão expirada — entre novamente');
+
+    // Sala orfa: host aponta pra um User que nao existe mais (guest
+    // deletado deixou a sala pendurada). Em vez de propagar erro de FK
+    // ao tentar entrar, limpa a sala morta e avisa o usuario.
+    const hostExists = await this.prisma.user.findUnique({ where: { id: room.hostId }, select: { id: true } });
+    if (!hostExists) {
+      await this.prisma.roomPlayer.deleteMany({ where: { roomId: room.id } });
+      await this.prisma.room.delete({ where: { id: room.id } }).catch(() => {});
+      if (!room.isPrivate) this.events.emit('rooms.public.changed');
+      throw new NotFoundException('Esta sala não está mais disponível.');
+    }
+
     const usedSeats = new Set(room.players.map(p => p.seat));
     let seat = 0;
     while (usedSeats.has(seat)) seat++;
@@ -725,8 +743,49 @@ export class RoomsService {
       select: { isGuest: true },
     });
     if (!user?.isGuest) return;
+
+    // Salas das quais o guest participa. Se ele ficou como unico membro
+    // (ou era host sem mais ninguem humano), a sala vira orfa apos o
+    // delete: hostId aponta pra um User que nao existe mais, e qualquer
+    // joinRoom subsequente quebra com FK violada. Resolve deletando a
+    // sala junto, ou transferindo host se sobrar humano.
+    const memberships = await this.prisma.roomPlayer.findMany({
+      where: { userId },
+      select: { roomId: true },
+    });
+
     await this.prisma.roomPlayer.deleteMany({ where: { userId } });
     await this.deleteEphemeralUsers([userId]);
+
+    for (const { roomId } of memberships) {
+      const room = await this.prisma.room.findUnique({
+        where: { id: roomId },
+        include: { players: { include: { user: { select: { id: true, isBot: true, isGuest: true } } } } },
+      });
+      if (!room) continue;
+
+      const humans = room.players.filter(p => p.user && !p.user.isBot && !p.user.isGuest);
+
+      if (room.players.length === 0 || humans.length === 0) {
+        // Ninguem humano restou — limpa a sala e efemeros remanescentes.
+        const ephemerals = room.players
+          .filter(p => p.user && (p.user.isBot || p.user.isGuest))
+          .map(p => p.userId);
+        if (ephemerals.length > 0) {
+          await this.prisma.roomPlayer.deleteMany({ where: { roomId, userId: { in: ephemerals } } });
+          await this.deleteEphemeralUsers(ephemerals);
+        }
+        await this.prisma.room.delete({ where: { id: roomId } }).catch(() => {});
+        if (!room.isPrivate) this.events.emit('rooms.public.changed');
+      } else if (!room.players.some(p => p.userId === room.hostId)) {
+        // Host saiu (era o guest deletado) mas sobrou humano — promove.
+        await this.prisma.room.update({
+          where: { id: roomId },
+          data: { hostId: humans[0].userId },
+        });
+        if (!room.isPrivate) this.events.emit('rooms.public.changed');
+      }
+    }
   }
 
   protected async deleteEphemeralUsers(ids: string[]) {
