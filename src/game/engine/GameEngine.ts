@@ -245,6 +245,7 @@ export class GameEngine {
   applyPlayCards(userId: string, cardIndices: number[], plateIndices?: number[]): EngineResult {
     if (this.phase !== 'PLAYER_TURN') return this.fail('Not the right phase');
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
+    if (this.findPlayer(userId)?.isOutOfRound) return this.fail('Você está fora desta rodada');
 
     const player = this.findPlayer(userId)!;
 
@@ -380,6 +381,7 @@ export class GameEngine {
   applyPassTurn(userId: string, insertAtIndex: number): EngineResult {
     if (this.phase !== 'PLAYER_TURN') return this.fail('Not the right phase');
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
+    if (this.findPlayer(userId)?.isOutOfRound) return this.fail('Você está fora desta rodada');
 
     this.pendingDraws.delete(userId); // defensive: discard any stale pending draw
 
@@ -432,6 +434,7 @@ export class GameEngine {
   applyDrawCard(userId: string): EngineResult {
     if (this.phase !== 'PLAYER_TURN') return this.fail('Not the right phase');
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
+    if (this.findPlayer(userId)?.isOutOfRound) return this.fail('Você está fora desta rodada');
 
     if (this.isFirstTurn) {
       return this.fail('No primeiro turno você é obrigado a jogar cartas');
@@ -561,6 +564,7 @@ export class GameEngine {
       return this.fail('Not in pick phase');
     }
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
+    if (this.findPlayer(userId)?.isOutOfRound) return this.fail('Você está fora desta rodada');
 
     const drawnCard = this.pendingDraws.get(userId) ?? null;
 
@@ -715,6 +719,7 @@ export class GameEngine {
   applyTrickPick(userId: string, action: 'take' | 'discard', insertAtIndex = 0): EngineResult {
     if (this.phase !== 'TRICK_PICK') return this.fail('Not in trick pick phase');
     if (this.currentPlayer().userId !== userId) return this.fail('Not your turn');
+    if (this.findPlayer(userId)?.isOutOfRound) return this.fail('Você está fora desta rodada');
 
     const events: EngineEvent[] = [];
     const player = this.findPlayer(userId)!;

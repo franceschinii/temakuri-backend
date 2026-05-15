@@ -153,6 +153,9 @@ export class ProfileService {
         mode: r.room.mode,
         isRanked: r.room.isRanked,
         placement: r.placement,
+        // isWinner eh a fonte de verdade pra "ganhou ou perdeu". Fallback
+        // pra tokensLeft > 0 em registros pre-migration (mesma semantica).
+        isWinner: r.isWinner ?? (r.tokensLeft > 0),
         totalPlayers: opponents.length + 1,
         xpEarned: r.xpEarned,
         coinsEarned: r.coinsEarned,

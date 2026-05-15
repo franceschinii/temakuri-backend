@@ -122,6 +122,9 @@ model GameResult {
   userId      String
   placement   Int
   tokensLeft  Int
+  /// True = sobreviveu (nao foi o eliminado). Em multi-player ha varios
+  /// winners; em 1v1 equivale a placement === 1. Backfill antigos: tokensLeft > 0.
+  isWinner    Boolean  @default(true)
   xpEarned    Int      @default(0)
   coinsEarned Int      @default(0)
   pdsChange   Int      @default(0)

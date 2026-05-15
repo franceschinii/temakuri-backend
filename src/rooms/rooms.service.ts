@@ -528,6 +528,7 @@ export class RoomsService {
             userId: r.userId,
             placement: r.placement,
             tokensLeft: r.tokensLeft,
+            isWinner,
             xpEarned: earned,
             coinsEarned: coins,
             isRanked: room.isRanked,
