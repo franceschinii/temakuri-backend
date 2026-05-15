@@ -247,6 +247,21 @@ model ChangelogEntry {
   @@index([published, sortIndex])
 }
 
+model NewsEntry {
+  id        String   @id @default(cuid())
+  date      String
+  pinned    Boolean  @default(false)
+  title     String
+  summary   String
+  body      String
+  published Boolean  @default(true)
+  sortIndex Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([published, sortIndex])
+}
+
 /// Log de uso de cupom — 1 registro por aplicacao em compra.
 model CouponRedemption {
   id            String   @id @default(cuid())
