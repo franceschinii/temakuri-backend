@@ -106,7 +106,16 @@ export class ShopService {
   }
 
   async getInventory(userId: string) {
-    return this.getOrCreateInventory(userId);
+    const inv = await this.getOrCreateInventory(userId);
+    // Avatares de bundle (ex: 15 -> tema corinthians) sao expostos como
+    // desbloqueados quando o usuario possui o tema vinculado. Mantem
+    // consistencia: qualquer tela que le o inventory ve o avatar liberado.
+    const bundled = Object.entries(AVATAR_BUNDLED_WITH_THEME)
+      .filter(([, theme]) => inv.unlockedThemes.includes(theme))
+      .map(([idx]) => Number(idx))
+      .filter(idx => !inv.unlockedAvatars.includes(idx));
+    if (bundled.length === 0) return inv;
+    return { ...inv, unlockedAvatars: [...inv.unlockedAvatars, ...bundled] };
   }
 
   async getCatalog(userId: string) {
