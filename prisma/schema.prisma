@@ -47,6 +47,8 @@ model User {
   passwordResetTokens PasswordResetToken[]
   diamondTransactions  DiamondTransaction[]
   premiumSubscriptions PremiumSubscription[]
+  review              Review?
+  reviewReactions     ReviewReaction[]
 }
 
 model Session {
@@ -260,6 +262,39 @@ model NewsEntry {
   updatedAt DateTime @updatedAt
 
   @@index([published, sortIndex])
+}
+
+model Review {
+  id           String    @id @default(cuid())
+  userId       String    @unique
+  rating       Int
+  title        String
+  comment      String
+  helpful      Int       @default(0)
+  notHelpful   Int       @default(0)
+  adminReply   String?
+  adminReplyAt DateTime?
+  published    Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reactions ReviewReaction[]
+
+  @@index([published, createdAt])
+}
+
+model ReviewReaction {
+  id       String @id @default(cuid())
+  reviewId String
+  userId   String
+  type     String
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([reviewId, userId])
+  @@index([reviewId])
 }
 
 /// Log de uso de cupom — 1 registro por aplicacao em compra.
