@@ -15,7 +15,7 @@ const AVATAR_DIAMOND_PRICES: Record<number, number> = {
   12: 80, // Geisha
   13: 80, // Samurai
   14: 300, // Dragao Dourado
-  15: 100, // Gavioes
+  15: 100, // Ninja
 };
 
 const MODE_PRICES: Record<string, number> = { MERCADO: 20, RODIZIO: 30, DEGUSTACAO: 50 };
@@ -25,7 +25,7 @@ const AVATAR_NAMES: Record<number, string> = {
   4: 'Sashimi', 5: 'Takoyaki', 6: 'Missô', 7: 'Udon', 8: 'Udon Gold',
   9: 'Yokai', 10: 'Kitsune', 11: 'Tanuki',
   12: 'Geisha', 13: 'Samurai', 14: 'Dragão Dourado',
-  15: 'Gaviões',
+  15: 'Ninja',
 };
 
 const ALL_AVATARS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
@@ -38,17 +38,17 @@ const THEME_PRICES: Record<string, number> = {
   oceano: 50,
   sakura: 75,
   oni: 150,
-  gavioes: 100,
+  ninja: 100,
 };
 const THEME_NAMES: Record<string, string> = {
   bambu: 'Bambu Verde',
   oceano: 'Oceano',
   sakura: 'Sakura',
   oni: 'Oni',
-  gavioes: 'Gaviões',
+  ninja: 'Ninja',
 };
 const FREE_THEMES = new Set(['bambu']);
-const ALL_THEMES = ['bambu', 'oceano', 'sakura', 'oni', 'gavioes'];
+const ALL_THEMES = ['bambu', 'oceano', 'sakura', 'oni', 'ninja'];
 
 // Pacotes de coins comprados com diamantes
 const COIN_PACKS: Record<string, { coins: number; diamonds: number }> = {

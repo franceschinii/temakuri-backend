@@ -37,7 +37,7 @@ if (existing) {
       userId: user.id,
       unlockedAvatars: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
       unlockedModes: ['TRADITIONAL', 'MERCADO', 'RODIZIO', 'DEGUSTACAO'],
-      unlockedThemes: ['bambu', 'oceano', 'sakura', 'oni', 'gavioes'],
+      unlockedThemes: ['bambu', 'oceano', 'sakura', 'oni', 'ninja'],
     },
   });
   console.log(`Usuario admin "${username}" criado com inventario completo.`);
