@@ -7,7 +7,7 @@ export class AdminGuard implements CanActivate {
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const request = ctx.switchToHttp().getRequest();
-    const userId: string | undefined = request.user?.sub;
+    const userId: string | undefined = request.user?.id;
     if (!userId) throw new ForbiddenException();
 
     // Revalida isAdmin direto no banco — ignora o valor do JWT para evitar
