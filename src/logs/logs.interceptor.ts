@@ -8,25 +8,21 @@ import {
 import { Observable, tap, catchError, throwError } from 'rxjs';
 import { LogCategory, LogsService } from './logs.service.js';
 
-/// Mapeia prefixos de rota para categorias. Rotas que nao casam com nenhum
-/// prefixo nao sao logadas pelo interceptor (logs especificos sao gravados
-/// manualmente via LogsService).
-const ROUTE_CATEGORY_MAP: Array<{ prefix: string; category: LogCategory }> = [
-  { prefix: '/auth', category: 'auth' },
-  { prefix: '/admin', category: 'admin' },
-  { prefix: '/payments', category: 'payment' },
-  { prefix: '/shop', category: 'shop' },
+/// Mapeia segmentos de rota para categorias. O matching procura o segmento
+/// em qualquer posicao do path, ignorando prefixos como /api/v1.
+const ROUTE_CATEGORY_MAP: Array<{ segment: string; category: LogCategory }> = [
+  { segment: 'auth', category: 'auth' },
+  { segment: 'admin', category: 'admin' },
+  { segment: 'payments', category: 'payment' },
+  { segment: 'shop', category: 'shop' },
 ];
 
 /// Metodos HTTP que importa logar. GET de leitura nao gera log
 /// (evita encher a tabela com GET /admin/users a cada refresh).
 const LOGGED_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
 
-/// Endpoints muito frequentes que nao trazem valor de auditoria.
-const SKIP_PATHS = new Set([
-  '/auth/refresh',
-  '/auth/me',
-]);
+/// Sufixos de path (ignorando prefixo /api/vN) que nao trazem valor de auditoria.
+const SKIP_SUFFIXES = ['/auth/refresh', '/auth/me'];
 
 @Injectable()
 export class LogsInterceptor implements NestInterceptor {
@@ -44,9 +40,12 @@ export class LogsInterceptor implements NestInterceptor {
     const pathOnly = url.split('?')[0];
 
     if (!LOGGED_METHODS.has(method)) return next.handle();
-    if (SKIP_PATHS.has(pathOnly)) return next.handle();
+    if (SKIP_SUFFIXES.some(s => pathOnly.endsWith(s))) return next.handle();
 
-    const matched = ROUTE_CATEGORY_MAP.find(m => pathOnly.startsWith(m.prefix));
+    // Procura o primeiro segmento conhecido em qualquer posicao do path.
+    // Tolera prefixos globais como /api/v1.
+    const segments = pathOnly.split('/').filter(Boolean);
+    const matched = ROUTE_CATEGORY_MAP.find(m => segments.includes(m.segment));
     if (!matched) return next.handle();
 
     const userId = req?.user?.id ?? null;
