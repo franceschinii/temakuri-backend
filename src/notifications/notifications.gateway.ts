@@ -16,6 +16,7 @@ import { ConfigService } from '@nestjs/config';
 import { RoomManager } from '../game/room-manager.js';
 import { RoomsService } from '../rooms/rooms.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { LogsService } from '../logs/logs.service.js';
 import { EngineEvent } from '../game/engine/GameEngine.js';
 import { WS_HEARTBEAT_INTERVAL, STARTING_COUNTDOWN_MS } from '../common/constants/game.constants.js';
 import type { QueueEntry } from '../matchmaking/matchmaking.service.js';
@@ -78,6 +79,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     private roomsService: RoomsService,
     private events: EventEmitter2,
     private prisma: PrismaService,
+    private logs: LogsService,
   ) {}
 
   afterInit() {
@@ -360,6 +362,14 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     // Sem isso o jogador ficava "fantasma" na mesa, travando os outros.
     const engineBeforeLeave = this.roomManager.get(data.roomCode);
     if (engineBeforeLeave && !engineBeforeLeave.isGameOver() && engineBeforeLeave.hasPlayer(client.userId)) {
+      void this.logs.record({
+        category: 'game',
+        action: 'game.abandon',
+        level: 'warn',
+        userId: client.userId,
+        username: client.username ?? null,
+        metadata: { roomCode: data.roomCode },
+      });
       const leaveEvents = engineBeforeLeave.removePlayerFromGame(client.userId);
       if (leaveEvents.length > 0) {
         this.dispatchEvents(data.roomCode, leaveEvents);
@@ -738,6 +748,21 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     const gameStats = gameOverPayload?.['stats'] as { saborTriggers: number; tricksWon: Record<string, number> } | undefined;
     if (!rankings) return;
     this.clearTurnTimer(roomCode);
+
+    const winner = rankings.find(r => r.isWinner);
+    void this.logs.record({
+      category: 'game',
+      action: 'game.over',
+      level: 'info',
+      userId: winner?.userId ?? null,
+      username: winner?.username ?? null,
+      metadata: {
+        roomCode,
+        rankings: rankings.map(r => ({ userId: r.userId, username: r.username, placement: r.placement, isWinner: r.isWinner, tokensLeft: r.tokensLeft })),
+        saborTriggers: gameStats?.saborTriggers ?? 0,
+      },
+    });
+
     try {
       const rewards = await this.roomsService.markFinished(roomCode, rankings.map(r => ({
         userId: r.userId,

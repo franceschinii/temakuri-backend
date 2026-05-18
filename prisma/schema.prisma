@@ -311,3 +311,34 @@ model CouponRedemption {
   @@index([userId])
   @@index([couponId])
 }
+
+/// Log estruturado de eventos sensiveis e de jogo para auditoria via /admin.
+/// Captura: auth (login/register/logout), admin (CRUD usuarios, banimentos,
+/// creditos), pagamentos, compras, eventos de partida (inicio/fim/abandono),
+/// matchmaking. Retencao: registros > 90 dias podem ser purgados externamente.
+model AdminLog {
+  id        String   @id @default(cuid())
+  /// Categoria semantica do evento. Valores fixos definidos em LogCategory.
+  /// auth | admin | payment | shop | game | matchmaking | system
+  category  String
+  /// Acao especifica dentro da categoria. Ex: auth.login, admin.credit_diamonds.
+  action    String
+  /// Nivel para destacar visualmente. info | warn | error
+  level     String   @default("info")
+  /// Usuario que executou ou foi alvo da acao. Null para eventos sistemicos.
+  userId    String?
+  /// Snapshot de username no momento — sobrevive a delete de user.
+  username  String?
+  /// IP de origem da request quando capturado via interceptor.
+  ip        String?
+  /// Payload arbitrario com contexto relevante (sem dados sensiveis).
+  metadata  Json?
+  /// HTTP status da resposta quando o log vem de uma request. Null para eventos.
+  statusCode Int?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([category, createdAt])
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}

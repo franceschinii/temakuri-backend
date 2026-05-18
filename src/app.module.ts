@@ -2,8 +2,10 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { PrismaModule } from './prisma/prisma.module.js';
+import { LogsModule } from './logs/logs.module.js';
+import { LogsInterceptor } from './logs/logs.interceptor.js';
 import { AuthModule } from './auth/auth.module.js';
 import { RoomsModule } from './rooms/rooms.module.js';
 import { ProfileModule } from './profile/profile.module.js';
@@ -23,6 +25,7 @@ import { ReviewsModule } from './reviews/reviews.module.js';
     EventEmitterModule.forRoot(),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     PrismaModule,
+    LogsModule,
     AuthModule,
     RoomsModule,
     ProfileModule,
@@ -38,6 +41,7 @@ import { ReviewsModule } from './reviews/reviews.module.js';
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_INTERCEPTOR, useClass: LogsInterceptor },
   ],
 })
 export class AppModule {}
