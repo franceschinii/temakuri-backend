@@ -1,5 +1,17 @@
 import { IsArray, IsBoolean, IsDateString, IsEmail, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 
+export class CreditDiamondsDto {
+  @IsInt()
+  @Min(-100_000)
+  @Max(100_000)
+  amount: number;
+
+  @IsOptional()
+  @IsString()
+  reason?: string;
+}
+
+
 export class UpdateUserDto {
   @IsOptional()
   @IsString()
@@ -88,9 +100,8 @@ export class UpdateProgressionDto {
   @IsBoolean()
   isPremium?: boolean;
 
-  @IsOptional()
-  @IsBoolean()
-  isAdmin?: boolean;
+  // isAdmin removido intencionalmente: promover/rebaixar admin so via CLI (seed-admin.mjs).
+  // Manter esse campo aqui permitiria que qualquer admin escalasse privilegios via API.
 
   @IsOptional()
   @IsArray()

@@ -5,7 +5,7 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { AdminGuard } from '../auth/guards/admin.guard.js';
 import { AdminService } from './admin.service.js';
-import { UpdateUserDto, ResetPasswordDto, UpdateStatsDto, ModerationDto, UpdateProgressionDto } from './dto/admin.dto.js';
+import { UpdateUserDto, ResetPasswordDto, UpdateStatsDto, ModerationDto, UpdateProgressionDto, CreditDiamondsDto } from './dto/admin.dto.js';
 
 @UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('admin')
@@ -73,7 +73,7 @@ export class AdminController {
 
   @Post('users/:id/credit-diamonds')
   @HttpCode(HttpStatus.OK)
-  creditDiamonds(@Param('id') id: string, @Body() dto: { amount: number; reason?: string }) {
+  creditDiamonds(@Param('id') id: string, @Body() dto: CreditDiamondsDto) {
     return this.adminService.creditDiamonds(id, dto.amount, dto.reason);
   }
 }
