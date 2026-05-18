@@ -750,6 +750,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.clearTurnTimer(roomCode);
 
     const winner = rankings.find(r => r.isWinner);
+    const roomForLog = await this.roomsService.findByCode(roomCode).catch(() => null);
     void this.logs.record({
       category: 'game',
       action: 'game.over',
@@ -758,6 +759,9 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       username: winner?.username ?? null,
       metadata: {
         roomCode,
+        mode: roomForLog?.mode ?? null,
+        isRanked: roomForLog?.isRanked ?? null,
+        playerCount: rankings.length,
         rankings: rankings.map(r => ({ userId: r.userId, username: r.username, placement: r.placement, isWinner: r.isWinner, tokensLeft: r.tokensLeft })),
         saborTriggers: gameStats?.saborTriggers ?? 0,
       },
