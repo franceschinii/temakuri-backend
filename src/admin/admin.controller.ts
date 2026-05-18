@@ -5,12 +5,21 @@ import {
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { AdminGuard } from '../auth/guards/admin.guard.js';
 import { AdminService } from './admin.service.js';
+import { DashboardService } from './dashboard.service.js';
 import { UpdateUserDto, ResetPasswordDto, UpdateStatsDto, ModerationDto, UpdateProgressionDto, CreditDiamondsDto } from './dto/admin.dto.js';
 
 @UseGuards(JwtAuthGuard, AdminGuard)
 @Controller('admin')
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly dashboardService: DashboardService,
+  ) {}
+
+  @Get('dashboard')
+  getDashboard() {
+    return this.dashboardService.getAll();
+  }
 
   @Get('rooms')
   findAllRooms() {
