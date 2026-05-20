@@ -11,7 +11,6 @@ const DEFAULTS: { kind: PriceKind; key: string; label: string; unit: string; def
   { kind: 'avatar_coins', key: '4', label: 'Avatar Sashimi', unit: 'moedas', def: 15 },
   { kind: 'avatar_coins', key: '5', label: 'Avatar Takoyaki', unit: 'moedas', def: 20 },
   { kind: 'avatar_coins', key: '6', label: 'Avatar Missô', unit: 'moedas', def: 25 },
-  { kind: 'avatar_coins', key: '7', label: 'Avatar Udon', unit: 'moedas', def: 30 },
   { kind: 'avatar_coins', key: '8', label: 'Avatar Udon Gold', unit: 'moedas', def: 50 },
   { kind: 'avatar_diamonds', key: '9', label: 'Avatar Yokai', unit: 'diamantes', def: 30 },
   { kind: 'avatar_diamonds', key: '10', label: 'Avatar Kitsune', unit: 'diamantes', def: 30 },

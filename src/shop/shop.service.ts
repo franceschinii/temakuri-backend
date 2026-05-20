@@ -3,10 +3,11 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { ShopPricingService } from './pricing.service.js';
 import { DIAMOND_PACKS, PREMIUM_MONTHLY } from '../payments/catalog.js';
 
-// Avatares pagaveis em coins (catalogo legado — slots 4 a 8)
-const AVATAR_PRICES: Record<number, number> = { 4: 15, 5: 20, 6: 25, 7: 30, 8: 50 };
+// Avatares pagaveis em coins (catalogo legado). O slot 7 virou legado e nao
+// deve mais aparecer para compra; contas antigas ainda podem tê-lo salvo.
+const AVATAR_PRICES: Record<number, number> = { 4: 15, 5: 20, 6: 25, 8: 50 };
 
-// Avatares premium pagaveis em diamantes (slots 9 a 14). Precos calibrados
+// Avatares premium pagaveis em diamantes (slots 9 a 15). Precos calibrados
 // pra ficarem abaixo da metade do primeiro pack de diamantes (DIAMONDS_100 = 100).
 const AVATAR_DIAMOND_PRICES: Record<number, number> = {
   9: 30,  // Yokai
@@ -20,6 +21,9 @@ const AVATAR_DIAMOND_PRICES: Record<number, number> = {
 
 const MODE_PRICES: Record<string, number> = { MERCADO: 20, RODIZIO: 30, DEGUSTACAO: 50 };
 
+const LEGACY_UDON_AVATAR_INDEX = 7;
+const UDON_GOLD_AVATAR_INDEX = 8;
+
 const AVATAR_NAMES: Record<number, string> = {
   0: 'Temaki', 1: 'Ramen', 2: 'Onigiri', 3: 'Gyoza',
   4: 'Sashimi', 5: 'Takoyaki', 6: 'Missô', 7: 'Udon', 8: 'Udon Gold',
@@ -28,8 +32,15 @@ const AVATAR_NAMES: Record<number, string> = {
   15: 'Ninja',
 };
 
-const ALL_AVATARS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+const ALL_AVATARS = [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15];
 const PURCHASABLE_MODES = ['MERCADO', 'RODIZIO', 'DEGUSTACAO'];
+
+function normalizeOwnedAvatars(unlockedAvatars: number[]) {
+  const normalized = new Set(
+    unlockedAvatars.map(index => index === LEGACY_UDON_AVATAR_INDEX ? UDON_GOLD_AVATAR_INDEX : index),
+  );
+  return Array.from(normalized);
+}
 
 // Temas de mesa. Bambu Verde e o tema padrao gratuito (preco 0,
 // automaticamente "owned" por todos). Demais sao comprados em diamantes.
@@ -103,7 +114,11 @@ export class ShopService {
   }
 
   async getInventory(userId: string) {
-    return this.getOrCreateInventory(userId);
+    const inv = await this.getOrCreateInventory(userId);
+    return {
+      ...inv,
+      unlockedAvatars: normalizeOwnedAvatars(inv.unlockedAvatars),
+    };
   }
 
   async getCatalog(userId: string) {
@@ -113,6 +128,8 @@ export class ShopService {
       where: { id: userId },
       select: { coins: true, diamonds: true, isPremium: true },
     });
+
+    const ownedAvatars = normalizeOwnedAvatars(inv.unlockedAvatars);
 
     const avatars = ALL_AVATARS.map(index => {
       const inDiamond = AVATAR_DIAMOND_PRICES[index] !== undefined;
@@ -127,7 +144,7 @@ export class ShopService {
         price,
         defaultPrice,
         currency: inDiamond ? ('diamonds' as const) : ('coins' as const),
-        owned: inv.unlockedAvatars.includes(index),
+        owned: ownedAvatars.includes(index),
         free: index <= 3,
       };
     });
@@ -222,11 +239,12 @@ export class ShopService {
   async purchaseAvatar(userId: string, avatarIndex: number) {
     await this.pricing.warm();
     const inv = await this.getOrCreateInventory(userId);
-    if (inv.unlockedAvatars.includes(avatarIndex)) {
+    const ownedAvatars = normalizeOwnedAvatars(inv.unlockedAvatars);
+    if (ownedAvatars.includes(avatarIndex)) {
       throw new BadRequestException('Avatar já desbloqueado');
     }
 
-    // Determina a moeda pelo catalogo base (slots 9-14 = diamantes); o
+    // Determina a moeda pelo catalogo base (slots 9-15 = diamantes); o
     // valor efetivo vem do helper (override ou default).
     const isDiamondAvatar = AVATAR_DIAMOND_PRICES[avatarIndex] !== undefined;
     const isCoinAvatar = AVATAR_PRICES[avatarIndex] !== undefined;

@@ -51,11 +51,11 @@ describe('Profile (e2e)', () => {
       expect(res.body.avatarIndex).toBe(2);
     });
 
-    it('rejeita avatarIndex fora do range (12) com 400', async () => {
+    it('rejeita avatarIndex legado do Udon (7) com 400', async () => {
       await request(app.getHttpServer())
         .patch('/api/v1/profile')
         .set('Authorization', `Bearer ${auth.tokens.alice}`)
-        .send({ avatarIndex: 12 })
+        .send({ avatarIndex: 7 })
         .expect(400);
     });
 

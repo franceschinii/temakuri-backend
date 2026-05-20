@@ -1,4 +1,4 @@
-import { IsString, IsInt, MinLength, MaxLength, IsOptional, Min, Max } from 'class-validator';
+import { IsString, IsInt, MinLength, MaxLength, IsOptional, IsIn } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UpdateProfileDto {
@@ -11,8 +11,7 @@ export class UpdateProfileDto {
 
   @ApiPropertyOptional()
   @IsInt()
-  @Min(0)
-  @Max(15)
+  @IsIn([0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15])
   @IsOptional()
   avatarIndex?: number;
 }

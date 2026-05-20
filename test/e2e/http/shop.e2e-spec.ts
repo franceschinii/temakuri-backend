@@ -77,11 +77,18 @@ describe('Shop (e2e)', () => {
     });
 
     it('rejeita compra com coins insuficientes (403)', async () => {
-      // User has 0 coins; avatar 7 costs 30
+      // User has 0 coins; avatar 8 costs 50
+      await request(app.getHttpServer())
+        .post('/api/v1/shop/avatar/8')
+        .set('Authorization', `Bearer ${auth.tokens.alice}`)
+        .expect(403);
+    });
+
+    it('rejeita compra do avatar Udon legado (400)', async () => {
       await request(app.getHttpServer())
         .post('/api/v1/shop/avatar/7')
         .set('Authorization', `Bearer ${auth.tokens.alice}`)
-        .expect(403);
+        .expect(400);
     });
 
     it('rejeita avatar já owned (400)', async () => {
