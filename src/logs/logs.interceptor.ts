@@ -50,7 +50,13 @@ export class LogsInterceptor implements NestInterceptor {
 
     const userId = req?.user?.id ?? null;
     const username = req?.user?.username ?? null;
-    const ip = (req?.ip ?? req?.headers?.['x-forwarded-for'] ?? null) as string | null;
+    // X-Forwarded-For pode vir como "ip1, ip2, ip3" (cadeia de proxies). O
+     // primeiro e o cliente original; os seguintes sao os proxies. Com
+     // trust proxy=1, req.ip ja resolve corretamente, mas preferimos o
+     // header explicito caso haja mais de um hop.
+    const xff = req?.headers?.['x-forwarded-for'];
+    const xffFirst = Array.isArray(xff) ? xff[0] : (typeof xff === 'string' ? xff.split(',')[0]?.trim() : null);
+    const ip = (xffFirst || req?.ip || null) as string | null;
     const action = this.deriveAction(method, pathOnly);
 
     return next.handle().pipe(
