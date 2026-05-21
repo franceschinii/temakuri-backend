@@ -11,6 +11,11 @@ async function bootstrap() {
   // disso — mas mantemos pra evitar regressao caso o provider mude.
   const app = await NestFactory.create(AppModule, { rawBody: true });
 
+  // Atras de nginx/proxy reverso. Sem isso req.ip retorna o IP do hop
+  // (rede docker, ex: ::ffff:10.0.1.11) em vez do cliente real do
+  // X-Forwarded-For. Confiamos em 1 hop (o nginx).
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+
   const allowedOrigins = (process.env.FRONTEND_URL ?? 'http://localhost:5173')
     .split(',')
     .map(o => o.trim());
