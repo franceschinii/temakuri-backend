@@ -4,10 +4,15 @@ import { NotificationsGateway } from './notifications.gateway.js';
 import { PresenceController } from './presence.controller.js';
 import { RoomManager } from '../game/room-manager.js';
 import { RoomsModule } from '../rooms/rooms.module.js';
+import { ReadyStateStore, InMemoryReadyStateStore } from './ready-state.store.js';
 
 @Module({
   imports: [JwtModule.register({}), RoomsModule],
-  providers: [NotificationsGateway, RoomManager],
+  providers: [
+    NotificationsGateway,
+    RoomManager,
+    { provide: ReadyStateStore, useClass: InMemoryReadyStateStore },
+  ],
   controllers: [PresenceController],
   exports: [NotificationsGateway],
 })

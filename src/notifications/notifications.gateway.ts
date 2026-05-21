@@ -20,6 +20,7 @@ import { LogsService } from '../logs/logs.service.js';
 import { EngineEvent } from '../game/engine/GameEngine.js';
 import { WS_HEARTBEAT_INTERVAL, STARTING_COUNTDOWN_MS } from '../common/constants/game.constants.js';
 import type { QueueEntry } from '../matchmaking/matchmaking.service.js';
+import { ReadyStateStore } from './ready-state.store.js';
 
 interface AuthenticatedSocket extends WebSocket {
   userId?: string;
@@ -52,7 +53,6 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   private roomBots = new Map<string, Set<string>>(); // roomCode → Set<botUserId>
   private turnTimers = new Map<string, NodeJS.Timeout>(); // roomCode → timer
   private heartbeatInterval: NodeJS.Timeout;
-  private roomReadyMap = new Map<string, Set<string>>(); // roomCode → Set<userId prontos>
   private matchmakingRooms = new Set<string>(); // roomCodes criados via matchmaking
   private chatCooldowns = new Map<string, number>(); // userId → timestamp último envio
   private reactionCooldowns = new Map<string, number>(); // userId → timestamp última reação
@@ -80,6 +80,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     private events: EventEmitter2,
     private prisma: PrismaService,
     private logs: LogsService,
+    private readyStore: ReadyStateStore,
   ) {}
 
   afterInit() {
@@ -206,39 +207,59 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         // Room in WAITING: remove guest immediately (they only exist while connected)
         const disconnectedRoomCode = client.roomCode;
         const disconnectedUserId = client.userId;
-        this.roomsService.leaveRoomIfGuest(disconnectedUserId, disconnectedRoomCode).then(async removed => {
-          // After guest removal (or registered user disconnect), check if room should close
-          const room = await this.roomsService.findByCode(disconnectedRoomCode!).catch(() => null);
-          if (!room || room.status !== 'WAITING') {
-            if (this.matchmakingRooms.has(disconnectedRoomCode!)) {
-              this.matchmakingRooms.delete(disconnectedRoomCode!);
+        // FIX C: wrapper async com try/catch explicito. Antes o .catch(()=>{})
+        // engolia qualquer erro silenciosamente — incluindo casos onde uma
+        // exception interrompia o cleanup deixando engine/timer zumbi.
+        void (async () => {
+          try {
+            // FIX A: remove o "pronto" desse usuario do store imediatamente,
+            // independente de ele ser guest ou registrado. Sem isso o ready
+            // ficaria orfao e poderia ser usado em uma startGame futura.
+            await this.readyStore.removeUser(disconnectedRoomCode, disconnectedUserId);
+
+            const removed = await this.roomsService.leaveRoomIfGuest(disconnectedUserId, disconnectedRoomCode);
+            const room = await this.roomsService.findByCode(disconnectedRoomCode).catch(() => null);
+            if (!room || room.status !== 'WAITING') {
+              if (this.matchmakingRooms.has(disconnectedRoomCode)) {
+                this.matchmakingRooms.delete(disconnectedRoomCode);
+              }
+              return;
             }
-            return;
-          }
 
-          // Count humans still connected (has at least one active socket)
-          const humanPlayers = room.players.filter((p: any) => !p.isBot);
-          const connectedHumans = humanPlayers.filter((p: any) => {
-            const sockets = this.userSockets.get(p.userId);
-            return sockets && sockets.size > 0;
-          });
+            // Count humans still connected (has at least one active socket)
+            const humanPlayers = room.players.filter((p: any) => !p.isBot);
+            const connectedHumans = humanPlayers.filter((p: any) => {
+              const sockets = this.userSockets.get(p.userId);
+              return sockets && sockets.size > 0;
+            });
 
-          if (connectedHumans.length === 0) {
-            // No humans left — close the room
-            this.clearTurnTimer(disconnectedRoomCode!);
-            await this.roomsService.leaveRoom(room.hostId, disconnectedRoomCode!).catch(() => {});
-            this.roomReadyMap.delete(disconnectedRoomCode!);
-            this.matchmakingRooms.delete(disconnectedRoomCode!);
-            this.roomSockets.delete(disconnectedRoomCode!);
-            return;
-          }
+            if (connectedHumans.length === 0) {
+              // No humans left — close the room and clean ALL in-memory state
+              this.clearTurnTimer(disconnectedRoomCode);
+              await this.roomsService.leaveRoom(room.hostId, disconnectedRoomCode).catch(() => {});
+              this.roomManager.destroy(disconnectedRoomCode);
+              this.roomBots.delete(disconnectedRoomCode);
+              await this.readyStore.clear(disconnectedRoomCode);
+              this.matchmakingRooms.delete(disconnectedRoomCode);
+              this.roomSockets.delete(disconnectedRoomCode);
+              return;
+            }
 
-          if (removed) {
-            this.roomsService.findByCode(disconnectedRoomCode!).then(updated => {
-              this.broadcastToRoom(disconnectedRoomCode!, 'lobby:room_updated', { room: updated });
-            }).catch(() => {});
+            // Algum humano ainda conectado: avisa os demais e atualiza UI.
+            // Faz broadcast mesmo quando removed === false (registrado offline)
+            // pra UI do botao "iniciar" reagir a perda de "pronto".
+            const readyAfter = await this.readyStore.snapshot(disconnectedRoomCode);
+            this.broadcastToRoom(disconnectedRoomCode, 'lobby:ready_snapshot', { ready: readyAfter });
+            if (removed) {
+              const updated = await this.roomsService.findByCode(disconnectedRoomCode).catch(() => null);
+              if (updated) {
+                this.broadcastToRoom(disconnectedRoomCode, 'lobby:room_updated', { room: updated });
+              }
+            }
+          } catch (err) {
+            console.error(`[handleDisconnect cleanup] room=${disconnectedRoomCode} user=${disconnectedUserId}`, err);
           }
-        }).catch(() => {});
+        })();
       }
     } else {
       // Guest with no active room (closed tab before joining a room) — free username
@@ -275,9 +296,9 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
       this.broadcastToRoom(data.roomCode, 'lobby:room_updated', { room });
 
-      // Envia snapshot do readyMap para que o cliente que acabou de entrar
+      // Envia snapshot do readyStore para que o cliente que acabou de entrar
       // (ou abriu nova aba) sincronize quem ja esta pronto
-      const readySnapshot = Array.from(this.roomReadyMap.get(data.roomCode) ?? []);
+      const readySnapshot = await this.readyStore.snapshot(data.roomCode);
       this.sendToClient(client, 'lobby:ready_snapshot', { ready: readySnapshot });
     } catch (e: any) {
       const msg = e?.message ?? '';
@@ -304,7 +325,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (timer) { clearTimeout(timer); this.turnTimers.delete(data.roomCode); }
 
     // Limpar estado de ready e bots
-    this.roomReadyMap.delete(data.roomCode);
+    await this.readyStore.clear(data.roomCode);
     this.roomBots.delete(data.roomCode);
 
     const updatedRoom = await this.roomsService.resetRoom(data.roomCode, client.userId);
@@ -330,7 +351,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (pending.confirmTimer) clearTimeout(pending.confirmTimer);
     this.pendingMatches.delete(data.roomCode);
     this.matchmakingRooms.delete(data.roomCode);
-    this.roomReadyMap.delete(data.roomCode);
+    await this.readyStore.clear(data.roomCode);
 
     // Notifica todos no match
     for (const player of pending.players) {
@@ -390,7 +411,17 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     const roomSet = this.roomSockets.get(data.roomCode);
     if (roomSet) roomSet.delete(client);
 
+    // FIX A: ao sair da sala, remove o "pronto" desse usuario.
+    // Sem isso o ready state ficaria orfao no store e poderia ser usado
+    // erroneamente se o mesmo userId reentrasse na sala.
+    await this.readyStore.removeUser(data.roomCode, client.userId);
+
     this.broadcastToRoom(data.roomCode, 'lobby:player_left', { userId: client.userId });
+
+    // Re-broadcast snapshot do ready pros que ficaram, para que a UI
+    // do botao "iniciar" se atualize sem precisar reload.
+    const readyAfterLeave = await this.readyStore.snapshot(data.roomCode);
+    this.broadcastToRoom(data.roomCode, 'lobby:ready_snapshot', { ready: readyAfterLeave });
 
     // Se a sala foi deletada do DB (caso unico humano saiu de partida com bots,
     // ou sala vazia), limpa o engine in-memory tambem. Sem isso o engine ficaria
@@ -400,7 +431,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (!stillExists) {
       this.roomManager.destroy(data.roomCode);
       this.roomBots.delete(data.roomCode);
-      this.roomReadyMap.delete(data.roomCode);
+      await this.readyStore.clear(data.roomCode);
       this.roomSockets.delete(data.roomCode);
     }
 
@@ -413,7 +444,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         const humanPlayers = room.players.filter((p: any) => !p.isBot);
         if (humanPlayers.length === 0) {
           await this.roomsService.leaveRoom(room.hostId, data.roomCode).catch(() => {});
-          this.roomReadyMap.delete(data.roomCode);
+          await this.readyStore.clear(data.roomCode);
           this.matchmakingRooms.delete(data.roomCode);
           this.roomSockets.delete(data.roomCode);
         }
@@ -430,17 +461,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       engine.setReady(client.userId, data.ready);
     }
 
-    if (!this.roomReadyMap.has(data.roomCode)) this.roomReadyMap.set(data.roomCode, new Set());
-    if (data.ready) {
-      this.roomReadyMap.get(data.roomCode)!.add(client.userId);
-    } else {
-      this.roomReadyMap.get(data.roomCode)!.delete(client.userId);
-    }
+    await this.readyStore.setReady(data.roomCode, client.userId, data.ready);
 
     this.broadcastToRoom(data.roomCode, 'lobby:player_ready', { userId: client.userId, ready: data.ready });
 
     // Tambem broadcast o array de confirmados para o frontend sincronizar UI
-    const readySnapshot = Array.from(this.roomReadyMap.get(data.roomCode) ?? []);
+    const readySnapshot = await this.readyStore.snapshot(data.roomCode);
     this.broadcastToRoom(data.roomCode, 'lobby:ready_snapshot', {
       ready: readySnapshot,
     });
@@ -450,7 +476,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       const room = await this.roomsService.findByCode(data.roomCode).catch(() => null);
       if (room && room.status === 'WAITING') {
         const humanPlayers = room.players.filter((p: any) => !p.isBot);
-        const readySet = this.roomReadyMap.get(data.roomCode) ?? new Set<string>();
+        const readySet = new Set(await this.readyStore.snapshot(data.roomCode));
         const allReady = humanPlayers.length >= 1 && humanPlayers.every((p: any) => readySet.has(p.userId));
         if (allReady) {
           // Delega para completeMatchmakingMatch que respeita pending state (ranked check, etc.)
@@ -473,7 +499,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
 
     const humanPlayers = room.players.filter(p => !p.isBot);
-    const readySet = this.roomReadyMap.get(data.roomCode) ?? new Set<string>();
+    const readySet = new Set(await this.readyStore.snapshot(data.roomCode));
     const notReady = humanPlayers.filter(p => !readySet.has(p.userId));
     if (notReady.length > 0) {
       return this.sendToClient(client, 'lobby:error', {
@@ -485,15 +511,35 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     this.broadcastToRoom(data.roomCode, 'lobby:game_starting', { countdown: STARTING_COUNTDOWN_MS });
 
     setTimeout(async () => {
-      this.roomReadyMap.delete(data.roomCode);
-
-      // Re-le a sala apos countdown — jogadores podem ter saido durante esses 3s
+      // Re-le a sala apos countdown — jogadores podem ter saido/entrado nesses 3s
       const freshRoom = await this.roomsService.findByCode(data.roomCode).catch(() => null);
       if (!freshRoom || freshRoom.status !== 'WAITING' || freshRoom.players.length < 2) {
+        await this.readyStore.clear(data.roomCode);
         return;
       }
       const activePlayers = freshRoom.players;
-      if (activePlayers.length < 2) return;
+      if (activePlayers.length < 2) {
+        await this.readyStore.clear(data.roomCode);
+        return;
+      }
+
+      // FIX B: revalida que TODOS os humanos da sala atual continuam prontos.
+      // Um novo jogador pode ter entrado via lobby:join_room durante os 3s
+      // do countdown — ele estaria em activePlayers mas nao em readySet.
+      // Sem essa revalidacao a partida comecaria com fantasma.
+      const freshHumans = activePlayers.filter((p: any) => !p.isBot);
+      const freshReadySet = new Set(await this.readyStore.snapshot(data.roomCode));
+      const stillNotReady = freshHumans.filter((p: any) => !freshReadySet.has(p.userId));
+      if (stillNotReady.length > 0) {
+        this.broadcastToRoom(data.roomCode, 'lobby:start_cancelled', {
+          reason: 'Um jogador entrou durante a contagem. Confirmem novamente.',
+          notReady: stillNotReady.map((p: any) => p.userId),
+        });
+        await this.readyStore.clear(data.roomCode);
+        return;
+      }
+
+      await this.readyStore.clear(data.roomCode);
 
       const engine = this.roomManager.create(data.roomCode, freshRoom.mode as any, freshRoom.handBias ?? 0, freshRoom.initialTokens ?? 2);
       activePlayers.forEach((p: any) => engine.addPlayer(p.userId, p.username, p.avatarIndex, p.seat, { isBot: p.isBot, isGuest: p.isGuest, isAdmin: p.isAdmin, level: p.level, pds: p.pds, sessionWins: p.sessionWins }));
@@ -924,9 +970,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   async handleMatchmakingFound(payload: { roomCode: string; players: QueueEntry[]; createdByUserId: string; isRanked?: boolean }) {
     const { roomCode, players } = payload;
 
-    if (!this.roomReadyMap.has(roomCode)) {
-      this.roomReadyMap.set(roomCode, new Set());
-    }
+    // readyStore cria a entrada sozinho no primeiro setReady; nao precisa inicializar aqui.
 
     this.matchmakingRooms.add(roomCode);
 
@@ -1005,7 +1049,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
 
     // QUICK: exige minimo 2 humanos CONFIRMADOS (ready=true). Quem nao confirmou e removido.
     if (!pending.isRanked) {
-      const readySet = this.roomReadyMap.get(roomCode) ?? new Set<string>();
+      const readySet = new Set(await this.readyStore.snapshot(roomCode));
       const confirmedHumans = humanPlayers.filter((p: any) => readySet.has(p.userId));
 
       if (confirmedHumans.length < 2) {
@@ -1013,7 +1057,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         const confirmedIds = confirmedHumans.map((p: any) => p.userId);
         const survivors = pending.players.filter(p => confirmedIds.includes(p.userId));
         this.matchmakingRooms.delete(roomCode);
-        this.roomReadyMap.delete(roomCode);
+        await this.readyStore.clear(roomCode);
         // Notifica todos que estavam no match
         for (const player of pending.players) {
           this.sendToUser(player.userId, 'matchmaking:cancelled', {
@@ -1055,7 +1099,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         return;
       }
 
-      this.roomReadyMap.delete(roomCode);
+      await this.readyStore.clear(roomCode);
       this.matchmakingRooms.delete(roomCode);
 
       const engine = this.roomManager.create(roomCode, freshRoom.mode as any, freshRoom.handBias ?? 0, freshRoom.initialTokens ?? 2);
@@ -1078,7 +1122,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
    */
   private cancelRankedMatch(roomCode: string, originalPlayers: QueueEntry[], survivorUserIds: string[]) {
     this.matchmakingRooms.delete(roomCode);
-    this.roomReadyMap.delete(roomCode);
+    void this.readyStore.clear(roomCode);
     this.clearTurnTimer(roomCode);
 
     // Notifica jogadores sobreviventes que o match foi cancelado e que voltam a fila
