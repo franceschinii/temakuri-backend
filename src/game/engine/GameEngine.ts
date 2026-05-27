@@ -1148,35 +1148,15 @@ export class GameEngine {
     }
 
     // --- hard ---
+    // Agressivo: sempre joga o melhor grupo. Sem passe estrategico —
+    // reduzir a mao e sempre melhor do que guardar cartas para combo.
 
-    // End-game: poucas cartas na mao → joga sem esperar combo.
-    if (hand.length <= 3) {
-      return { action: 'play', cardIndices: best.indices };
-    }
-
-    // Pressao: oponente proximo de fechar a mao → interrompe.
+    // Pressao maxima no final: qualquer oponente com <= 3 cartas → prioridade absoluta.
     const activeOpponents = this.activePlayers().filter(p => p.userId !== userId && !p.isOutOfRound);
-    if (activeOpponents.some(p => p.hand.length <= 2)) {
+    if (hand.length <= 4 || activeOpponents.some(p => p.hand.length <= 3)) {
       return { action: 'play', cardIndices: best.indices };
-    }
-
-    // Passe estrategico: best e singulo, pilha calma, mao grande, combo montavel.
-    if (best.size === 1 && !this.saborActive && this.pile.length <= 3 && hand.length >= 5) {
-      if (this.handHasComboOpportunity(hand)) {
-        return { action: 'pass', insertAtIndex: hand.length };
-      }
     }
 
     return { action: 'play', cardIndices: best.indices };
-  }
-
-  /** Retorna true se a mao tem cartas de mesmo valor em posicoes nao-adjacentes (combo montavel). */
-  private handHasComboOpportunity(hand: Card[]): boolean {
-    for (let i = 0; i < hand.length; i++) {
-      for (let j = i + 2; j < hand.length; j++) {
-        if (hand[j].value === hand[i].value) return true;
-      }
-    }
-    return false;
   }
 }
