@@ -1056,6 +1056,12 @@ export class GameEngine {
     return this.findPlayer(userId)?.isOutOfRound === true;
   }
 
+  getHumanPlayerIds(): string[] {
+    return this.activePlayers()
+      .filter(p => !p.isBot)
+      .map(p => p.userId);
+  }
+
   /**
    * Recuperacao defensiva: se o turno atual aponta pra um jogador
    * out-of-round (nao deveria acontecer com a logica nova, mas blinda
@@ -1081,18 +1087,18 @@ export class GameEngine {
   /**
    * Calcula uma jogada para um bot. A heuristica varia por dificuldade:
    *
-   * - easy: pega o PRIMEIRO grupo adjacente de mesmo valor que e legal.
-   *   Sem estrategia — comportamento original.
+   * - easy: primeiro grupo adjacente legal de mesmo valor. Sem estrategia.
    *
-   * - medium: enumera TODOS os grupos legais e escolhe o MAIOR (mais
-   *   cartas saem por jogada). Respeita Sabor ativo.
+   * - medium: maior grupo legal; empate de tamanho resolvido por maior valor.
+   *   Nunca passa voluntariamente — joga agressivo.
    *
-   * - hard: alem de preferir o maior grupo, se a melhor jogada e de
-   *   apenas 1 carta E existem outras iguais escondidas na mao E a pilha
-   *   esta baixa (<=2 cartas), passa estrategicamente pra tentar reunir
-   *   combo. Heuristica simples — TODO: tunar com feedback real do jogo.
+   * - hard: mesmo criterio de selecao do medium, mais:
+   *   - End-game (<=3 cartas na mao): sempre joga, sem esperar combo.
+   *   - Pressao (oponente com <=2 cartas): sempre joga para nao deixar fechar.
+   *   - Passe estrategico: so quando best.size==1 E pilha calma (<=3) E
+   *     mao grande (>=5) E sem sabor E ha duplicatas nao-adjacentes montaveis.
    *
-   * Default (bots pre-migration sem difficulty) = easy.
+   * Default (bots sem difficulty definida) = easy.
    */
   computeBotMove(
     userId: string,
@@ -1124,35 +1130,53 @@ export class GameEngine {
     }
 
     if (legalGroups.length === 0) {
-      return { action: 'pass', insertAtIndex: player.hand.length };
+      return { action: 'pass', insertAtIndex: hand.length };
     }
 
     if (difficulty === 'easy') {
-      // Primeiro grupo legal — comportamento original.
-      const g = legalGroups[0];
-      return { action: 'play', cardIndices: g.indices };
+      return { action: 'play', cardIndices: legalGroups[0].indices };
     }
 
-    // medium e hard: escolhe o maior grupo (em empate, o primeiro).
+    // medium e hard: maior grupo; empate de tamanho resolvido por maior valor.
     let best = legalGroups[0];
     for (const g of legalGroups) {
-      if (g.size > best.size) best = g;
+      if (g.size > best.size || (g.size === best.size && g.value > best.value)) best = g;
     }
 
     if (difficulty === 'medium') {
       return { action: 'play', cardIndices: best.indices };
     }
 
-    // hard: se a melhor jogada e de 1 carta E ha cartas iguais escondidas
-    // na mao (nao adjacentes) E pilha calma E sem sabor, passa pra reunir
-    // combo melhor. TODO: tunar threshold com feedback.
-    if (best.size === 1 && this.pile.length <= 2 && !this.saborActive) {
-      const totalSameValue = hand.filter(c => c.value === best.value).length;
-      if (totalSameValue >= 2) {
-        return { action: 'pass', insertAtIndex: player.hand.length };
+    // --- hard ---
+
+    // End-game: poucas cartas na mao → joga sem esperar combo.
+    if (hand.length <= 3) {
+      return { action: 'play', cardIndices: best.indices };
+    }
+
+    // Pressao: oponente proximo de fechar a mao → interrompe.
+    const activeOpponents = this.activePlayers().filter(p => p.userId !== userId && !p.isOutOfRound);
+    if (activeOpponents.some(p => p.hand.length <= 2)) {
+      return { action: 'play', cardIndices: best.indices };
+    }
+
+    // Passe estrategico: best e singulo, pilha calma, mao grande, combo montavel.
+    if (best.size === 1 && !this.saborActive && this.pile.length <= 3 && hand.length >= 5) {
+      if (this.handHasComboOpportunity(hand)) {
+        return { action: 'pass', insertAtIndex: hand.length };
       }
     }
 
     return { action: 'play', cardIndices: best.indices };
+  }
+
+  /** Retorna true se a mao tem cartas de mesmo valor em posicoes nao-adjacentes (combo montavel). */
+  private handHasComboOpportunity(hand: Card[]): boolean {
+    for (let i = 0; i < hand.length; i++) {
+      for (let j = i + 2; j < hand.length; j++) {
+        if (hand[j].value === hand[i].value) return true;
+      }
+    }
+    return false;
   }
 }

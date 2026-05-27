@@ -52,6 +52,13 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
   private roomSockets = new Map<string, Set<AuthenticatedSocket>>();
   private roomBots = new Map<string, Set<string>>(); // roomCode → Set<botUserId>
   private turnTimers = new Map<string, NodeJS.Timeout>(); // roomCode → timer
+  // Gate: segura eventos pós-rodada até todos os humanos confirmarem "Continuar"
+  private pendingRoundStarts = new Map<string, {
+    events: EngineEvent[];
+    readyUsers: Set<string>;
+    humanUserIds: Set<string>;
+    timeoutHandle: NodeJS.Timeout;
+  }>();
   private heartbeatInterval: NodeJS.Timeout;
   private matchmakingRooms = new Set<string>(); // roomCodes criados via matchmaking
   private chatCooldowns = new Map<string, number>(); // userId → timestamp último envio
@@ -203,6 +210,15 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
         const events = engine.setPlayerConnected(client.userId, false);
         this.dispatchEvents(client.roomCode, events);
         this.applyRankedAbandonmentIfNeeded(client.userId, client.roomCode).catch(() => {});
+
+        // Se o jogador desconectou durante o gate de fim de rodada, auto-confirma
+        // por ele para nao travar os outros jogadores.
+        const pendingGate = this.pendingRoundStarts.get(client.roomCode);
+        if (pendingGate && pendingGate.humanUserIds.has(client.userId)) {
+          pendingGate.readyUsers.add(client.userId);
+          const allReady = [...pendingGate.humanUserIds].every(uid => pendingGate.readyUsers.has(uid));
+          if (allReady) this.flushPendingRoundStart(client.roomCode);
+        }
       } else {
         // Room in WAITING: remove guest immediately (they only exist while connected)
         const disconnectedRoomCode = client.roomCode;
@@ -239,6 +255,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
               await this.roomsService.leaveRoom(room.hostId, disconnectedRoomCode).catch(() => {});
               this.roomManager.destroy(disconnectedRoomCode);
               this.roomBots.delete(disconnectedRoomCode);
+              this.clearPendingRoundStart(disconnectedRoomCode);
               await this.readyStore.clear(disconnectedRoomCode);
               this.matchmakingRooms.delete(disconnectedRoomCode);
               this.roomSockets.delete(disconnectedRoomCode);
@@ -393,14 +410,12 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       });
       const leaveEvents = engineBeforeLeave.removePlayerFromGame(client.userId);
       if (leaveEvents.length > 0) {
-        this.dispatchEvents(data.roomCode, leaveEvents);
+        this.dispatchEventsGated(data.roomCode, leaveEvents, engineBeforeLeave);
         if (engineBeforeLeave.isGameOver()) {
           // Aguarda markFinished ANTES do leaveRoom: o jogador que saiu
           // precisa estar no DB pra a derrota ser registrada (markFinished
           // ignora quem ja saiu da sala).
           await this.finalizeGameOver(data.roomCode, leaveEvents);
-        } else {
-          this.scheduleBotMoveIfNeeded(data.roomCode, engineBeforeLeave);
         }
       }
     }
@@ -431,6 +446,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     if (!stillExists) {
       this.roomManager.destroy(data.roomCode);
       this.roomBots.delete(data.roomCode);
+      this.clearPendingRoundStart(data.roomCode);
       await this.readyStore.clear(data.roomCode);
       this.roomSockets.delete(data.roomCode);
     }
@@ -616,8 +632,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
     this.clearTurnTimer(data.roomCode);
 
-    this.dispatchEvents(data.roomCode, result.events);
-    this.scheduleBotMoveIfNeeded(data.roomCode, engine);
+    this.dispatchEventsGated(data.roomCode, result.events, engine);
 
     if (engine.isGameOver()) {
       const gameOverPayload = result.events.find(e => e.type === 'game:game_over')?.payload;
@@ -658,8 +673,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
     this.clearTurnTimer(data.roomCode);
 
-    this.dispatchEvents(data.roomCode, result.events);
-    this.scheduleBotMoveIfNeeded(data.roomCode, engine);
+    this.dispatchEventsGated(data.roomCode, result.events, engine);
   }
 
   @SubscribeMessage('game:draw_card')
@@ -675,8 +689,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
     this.clearTurnTimer(data.roomCode);
 
-    this.dispatchEvents(data.roomCode, result.events);
-    this.scheduleBotMoveIfNeeded(data.roomCode, engine);
+    this.dispatchEventsGated(data.roomCode, result.events, engine);
   }
 
   @SubscribeMessage('game:insert_drawn_card')
@@ -692,8 +705,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
     this.clearTurnTimer(data.roomCode);
 
-    this.dispatchEvents(data.roomCode, result.events);
-    this.scheduleBotMoveIfNeeded(data.roomCode, engine);
+    this.dispatchEventsGated(data.roomCode, result.events, engine);
   }
 
   @SubscribeMessage('game:duel_pass_pick')
@@ -709,8 +721,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
     this.clearTurnTimer(data.roomCode);
 
-    this.dispatchEvents(data.roomCode, result.events);
-    this.scheduleBotMoveIfNeeded(data.roomCode, engine);
+    this.dispatchEventsGated(data.roomCode, result.events, engine);
   }
 
   @SubscribeMessage('game:trick_pick')
@@ -726,8 +737,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
     this.clearTurnTimer(data.roomCode);
 
-    this.dispatchEvents(data.roomCode, result.events);
-    this.scheduleBotMoveIfNeeded(data.roomCode, engine);
+    this.dispatchEventsGated(data.roomCode, result.events, engine);
   }
 
   @SubscribeMessage('game:market_swap')
@@ -925,7 +935,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       }
 
       if (result.success) {
-        this.dispatchEvents(roomCode, result.events);
+        this.dispatchEventsGated(roomCode, result.events, currentEngine);
         if (currentEngine.isGameOver()) {
           const gameOverPayload = result.events.find(e => e.type === 'game:game_over')?.payload;
           const rankings = gameOverPayload?.['rankings'] as any[];
@@ -949,9 +959,8 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
               this.roomBots.delete(roomCode);
             }, 300_000);
           }
-        } else {
-          this.scheduleBotMoveIfNeeded(roomCode, currentEngine);
         }
+        // scheduleBotMoveIfNeeded is called inside dispatchEventsGated for the non-gated path
       }
     }, delay);
   }
@@ -1215,6 +1224,108 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
     }
   }
 
+  /**
+   * Despacha eventos e, se game:round_ended estiver na lista, segura os
+   * eventos da nova rodada (round_started, turn_started, etc.) até que todos
+   * os jogadores humanos confirmem "Continuar". Bots nao precisam confirmar.
+   * Fallback de 12s: libera automaticamente se alguém desconectar.
+   */
+  private dispatchEventsGated(
+    roomCode: string,
+    events: EngineEvent[],
+    engine: import('../game/engine/GameEngine.js').GameEngine,
+  ): void {
+    const splitIdx = events.findIndex(e => e.type === 'game:round_ended');
+
+    if (splitIdx === -1) {
+      this.dispatchEvents(roomCode, events);
+      this.scheduleBotMoveIfNeeded(roomCode, engine);
+      return;
+    }
+
+    // Despacha tudo até (e inclusive) game:round_ended.
+    this.dispatchEvents(roomCode, events.slice(0, splitIdx + 1));
+
+    const remaining = events.slice(splitIdx + 1);
+
+    // Fim de jogo: game_over segue imediatamente, sem gate.
+    if (remaining.length === 0 || remaining.some(e => e.type === 'game:game_over')) {
+      this.dispatchEvents(roomCode, remaining);
+      return;
+    }
+
+    // Configura gate: aguarda confirmacao dos humanos.
+    this.clearPendingRoundStart(roomCode);
+
+    const humanUserIds = new Set(engine.getHumanPlayerIds());
+
+    const timeoutHandle = setTimeout(
+      () => this.flushPendingRoundStart(roomCode),
+      12_000,
+    );
+
+    this.pendingRoundStarts.set(roomCode, {
+      events: remaining,
+      readyUsers: new Set(),
+      humanUserIds,
+      timeoutHandle,
+    });
+
+    this.broadcastToRoom(roomCode, 'game:waiting_for_continue', {
+      readyCount: 0,
+      humanCount: humanUserIds.size,
+    });
+
+    // Sala apenas com bots (nao deve acontecer em producao, mas defensivo).
+    if (humanUserIds.size === 0) {
+      this.flushPendingRoundStart(roomCode);
+    }
+  }
+
+  private flushPendingRoundStart(roomCode: string): void {
+    const pending = this.pendingRoundStarts.get(roomCode);
+    if (!pending) return;
+    clearTimeout(pending.timeoutHandle);
+    this.pendingRoundStarts.delete(roomCode);
+
+    this.dispatchEvents(roomCode, pending.events);
+
+    const engine = this.roomManager.get(roomCode);
+    if (engine && !engine.isGameOver()) {
+      this.scheduleBotMoveIfNeeded(roomCode, engine);
+    }
+  }
+
+  private clearPendingRoundStart(roomCode: string): void {
+    const pending = this.pendingRoundStarts.get(roomCode);
+    if (pending) {
+      clearTimeout(pending.timeoutHandle);
+      this.pendingRoundStarts.delete(roomCode);
+    }
+  }
+
+  @SubscribeMessage('game:continue_round')
+  handleContinueRound(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: { roomCode: string },
+  ): void {
+    if (!client.userId) return;
+    const pending = this.pendingRoundStarts.get(data.roomCode);
+    if (!pending) return;
+
+    pending.readyUsers.add(client.userId);
+
+    const allReady = [...pending.humanUserIds].every(uid => pending.readyUsers.has(uid));
+    if (allReady) {
+      this.flushPendingRoundStart(data.roomCode);
+    } else {
+      this.broadcastToRoom(data.roomCode, 'game:waiting_for_continue', {
+        readyCount: pending.readyUsers.size,
+        humanCount: pending.humanUserIds.size,
+      });
+    }
+  }
+
   private dispatchEvents(roomCode: string, events: EngineEvent[]) {
     for (const event of events) {
       if (event.targetUserId) {
@@ -1315,8 +1426,7 @@ export class NotificationsGateway implements OnGatewayConnection, OnGatewayDisco
       }
 
       if (result.success) {
-        this.dispatchEvents(roomCode, result.events);
-        this.scheduleBotMoveIfNeeded(roomCode, engine);
+        this.dispatchEventsGated(roomCode, result.events, engine);
         if (engine.isGameOver()) {
           const gameOverPayload = result.events.find(e => e.type === 'game:game_over')?.payload;
           const rankings = gameOverPayload?.['rankings'] as any[];
