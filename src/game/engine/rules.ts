@@ -67,16 +67,11 @@ export function validatePlayIndices(
     return { valid: false, reason: 'Must play at least one card' };
   }
 
-  // Pratos só podem ser usados em combinação com cartas da mão — nunca sozinhos
-  if (indices.length === 0 && hasPlates) {
-    return { valid: false, reason: 'Plate cards must be combined with at least one hand card' };
-  }
-
   if (indices.some(i => i < 0 || i >= hand.length)) {
     return { valid: false, reason: 'Card index out of bounds' };
   }
 
-  if (!isContiguous(indices)) {
+  if (indices.length > 0 && !isContiguous(indices)) {
     return { valid: false, reason: 'Selected cards must be adjacent in hand' };
   }
 
